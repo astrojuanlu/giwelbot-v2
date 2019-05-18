@@ -1,0 +1,5 @@
+#!/bin/bash
+cd "$(dirname "$(readlink -fn "$0")")"
+pylint3 bot/*.py \
+        --good-names=logger,context \
+        --disable=missing-docstring

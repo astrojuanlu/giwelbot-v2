@@ -1,0 +1,155 @@
+TASK SKETCH:
+
+  new_user_handler:
+
+    - exclude yourself
+    - apply banning rules                   → expulsion user
+                                            - delete join message
+      (for no bot)
+    - apply full restrictions
+    - send captcha                          → thread (job)
+    - create info:
+      - join = OBJ_message
+      - greet = True
+      - restrict = None
+      - captchas = {'wait': OBJ,
+                    'group': {···},
+                    'private': {}}
+    - throw greeting                        → thread (job)
+      - increment num greeting
+
+  left_user_handler:
+
+    - if the bot throws it out              → delete message
+    - stop captchas timer
+    - delete group captcha
+    - modify private captcha
+    - delete all info
+      - and delete_if_empty
+
+  group_talk_handler:
+
+    - exclude yourself
+      (if pending greeting)
+    - cancel greeting grouping
+    - if anyone greeted                     → cancel pending greetings
+    - new user on hold?                     → delete message
+    - new recent user?                      → delete multimedia message
+      - If the restriction time ends        → delete of info: restrict
+        - and delete_if_empty
+
+  captcha_handler:
+
+    - verify identity
+    - new token?                            → change captcha
+    - token correct?
+      - in group:                           → change text/status in group
+      - in private:                         → change text/status in private/group
+      - set restrict timedelta
+      - apply temp restrictions
+    - incorrect token?
+      - in group:                           → change text/status in group
+                                            - send link to private
+      - in private:                         → change text/status in private
+
+  captcha_thread:                           (waiting time is over to solve captcha)
+
+    - delete group captcha
+    - if status is WAITING (private)        → modify private captcha
+    - not correct state                     → expulsion user
+                                            - delete join message
+                                            - delete of info: join, greet, restrict
+    - delete of info captchas
+      - and delete_if_empty
+
+  greeting_thread:                          (waiting time is over: greet the users)
+
+    - decrement num greeting
+    - per user without captchas
+      - reobtain user data
+      - apply banning rules                 → expulsion user
+                                            - delete join message
+                                            - delete of info: restrict
+      - delete from info: join, greet
+        - and delete_if_empty
+      - make a list of names (if greet=True and with previous)
+      - send greeting
+      - delete previous greeting
+      - save previous
+
+
+
+DATA STRUCTURE:
+
+  data = {
+      chat_id: {
+          user_id: {                            to control user join
+              'join': OBJ_message,              joined service message
+              'greet': BOOL,
+              'restrict': DATETIME,             temporary restriction
+              'captchas': {
+                  'wait': OBJ_job,              to cancel ahead of time
+                  'group': {
+                      'message': OBJ_message,
+                      'status': ENUM_status,
+                      'token': STR_token,
+                  },
+                  'private': {
+                      'message': OBJ_message,
+                      'status': ENUM_status,
+                      'token': STR_token,
+                  },
+              },
+          },
+          'previous': {                         to group greetings
+              'names': [STR_name],
+              'message': OBJ_message,
+          },
+          'greeting': INT_num,                  know is a pending greeting
+      },
+      'privates': {                             for use in private menu
+          user_id: {
+              'num• title': chat_id             deleted in every request
+          }
+      }
+  }
+
+  ENUM MenuStep:        STOP, INIT, CHAT
+  ENUM UserRestriction: NONE, TEMP, FULL
+  ENUM CaptchaStatus:   WAITING, SOLVED, WRONG
+
+
+
+SEARCH ORDER:
+
+  update.effective_chat:
+
+    update.message.from_user
+    update.edited_message.from_user
+    update.inline_query.from_user
+    update.chosen_inline_result.from_user
+    update.callback_query.from_user
+    update.shipping_query.from_user
+    update.pre_checkout_query.from_user
+
+  update.effective_user:
+
+    update.message.chat
+    update.edited_message.chat
+    update.callback_query.message.chat
+    update.channel_post.chat
+    update.edited_channel_post.chat
+
+  update.effective_message:
+
+    update.message
+    update.edited_message
+    update.callback_query.message
+    update.channel_post
+    update.edited_channel_post
+
+
+
+READINGS:
+
+  https://numpydoc.readthedocs.io/en/latest/format.html#docstring-standard
