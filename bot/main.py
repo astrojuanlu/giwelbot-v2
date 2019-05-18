@@ -29,7 +29,7 @@ from captcha import get_captcha
 
 TOKEN = os.environ['TELEGRAM_TOKEN']
 PORT = int(os.environ['PORT'])
-HOST = 'https://bienvenida-es-bot.herokuapp.com'
+HOST = 'https://test-welcome-tg-bot.herokuapp.com'
 BIND = '0.0.0.0'
 
 
