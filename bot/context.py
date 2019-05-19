@@ -68,7 +68,7 @@ class Context():
         del data[key]
 
 
-    @flogger
+    #@flogger
     def __get_last_data_key(self, keys, method):
         '''
         Search for the keys in the data and return
@@ -109,8 +109,8 @@ class Context():
         '''
         Sets the keys as the list of keys.
         '''
-        self.del_keys()
-        self.add_keys(*keys)
+        self.__keys.clear()
+        self.__keys.extend(keys)
 
 
     @flogger
@@ -177,7 +177,7 @@ class Context():
                 kwargs['update'] = update
                 chat = update.effective_chat
                 user = update.effective_user
-                bot.send_chat_action(chat.id, ChatAction.TYPING)
+                #bot.send_chat_action(chat.id, ChatAction.TYPING)
 
             elif isinstance(args[1], Job):
                 job = args[1]
@@ -208,7 +208,6 @@ class Context():
             with self.__lock:
                 self.set_keys(*keys)
                 result = func(**available_vars)
-                self.del_keys()
 
             return result
         return decorator

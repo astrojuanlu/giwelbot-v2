@@ -330,7 +330,7 @@ def greeting_thread(chat, data):
     # Waiting time is over: greet the users
 
     # Decrement num greeting
-    data['greeting'] = data['greeting'] - 1
+    data[:, 'greeting'] = data[:, 'greeting'] - 1
 
     names_list = []
     for user_id in data.user_ids():
@@ -437,8 +437,8 @@ def new_user_handler(bot, update, job_queue, chat, data):
 
     if new:
         # Throw greeting thread
-        wait = job_queue.run_once(greeting_thread, GREETING_TIMER, context=(chat,))
         data[chat.id, 'greeting'] = data[chat.id, 'greeting':0] + 1
+        wait = job_queue.run_once(greeting_thread, GREETING_TIMER, context=(chat,))
 
 
 @flogger
@@ -638,10 +638,10 @@ def menu_handler(bot, update, chat, user, data):
         keyboard = ReplyKeyboardRemove()
         message = update.message.reply_text(text=text, reply_markup=keyboard)
         logger.debug(LOG_MSG_P, user.id, 'must wait', bool(message))
-        return MenuStep.END
+        return MenuStep.STOP
 
     send_help(bot, chat.id)
-    return MenuStep.END
+    return MenuStep.STOP
 
 
 @flogger
@@ -684,7 +684,7 @@ def chat_process(update, chat, user, data, key):
             'token': token,
         }
         logger.debug(LOG_MSG_P, user.id, 'send captcha', bool(message))
-        return MenuStep.END
+        return MenuStep.STOP
 
     return incorrect_process(update)
 
@@ -698,7 +698,7 @@ def stop_handler(update, user, data):
     message = update.message.reply_text(text=CANCEL_MENU_TEXT,
                                         reply_markup=ReplyKeyboardRemove())
     logger.debug(LOG_MSG_P, user.id, 'cancel menu', bool(message))
-    return MenuStep.END
+    return MenuStep.STOP
 
 
 @flogger
