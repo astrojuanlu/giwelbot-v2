@@ -2,7 +2,7 @@
 '''Telegram bot for welcome.'''
 
 import sys
-assert sys.hexversion > 0x03070000, 'requires python 3.5 or higher'
+assert sys.hexversion > 0x03070000, 'requires python 3.7 or higher'
 
 import os
 import re
