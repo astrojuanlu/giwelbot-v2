@@ -3,6 +3,7 @@
 
 import sys
 assert sys.hexversion > 0x03070000, 'requires python 3.7 or higher'
+# Use: hmac.digest(key, msg, digest)
 
 import os
 import re
@@ -24,7 +25,7 @@ from telegram.error import BadRequest
 from debug import flogger
 from tools import (run_async, get_token, change_seed, remove_diacritics,
                    time_to_text, chunked)
-from context import Context
+from context import Contextualizer
 from captcha import get_captcha
 
 TOKEN = os.environ['TELEGRAM_TOKEN']
@@ -127,7 +128,7 @@ HELP = ('<b>Bot de bienvenida</b>\n\n'
 logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-context = Context()
+context = Contextualizer()
 
 
 class UserRestriction(enum.Enum):
@@ -150,6 +151,17 @@ class CaptchaStatus(enum.Enum):
 
 # ----------------------------------- #
 # Auxiliary functions
+
+
+def assert_keys(key_names):
+    def wrapper(func):
+        @functools.wraps(func)
+        def wrapped(ctx):
+            keys = [getattr(ctx, key) for key in key_names.split()]
+            assert ctx.mem.get_keys() == keys, 'keys: {func.__module__}'
+            return func(ctx)
+        return wrapped
+    return wrapper
 
 
 def get_mention_html(user):
@@ -201,6 +213,8 @@ def restrict_user(bot, chat_id, user_id, restriction):
         raise NotImplementedError(str(restriction))
 
     parameters = {
+        'chat_id': chat_id,
+        'user_id': user_id,
         'until_date': until_date,
         'can_send_messages': can_send_messages,
         'can_send_media_messages': can_others,
@@ -208,7 +222,7 @@ def restrict_user(bot, chat_id, user_id, restriction):
         'can_add_web_page_previews': can_others,
     }
     try:
-        result = bot.restrict_chat_member(chat_id, user_id, **parameters)
+        result = bot.restrict_chat_member(**parameters)
     except BadRequest as exc:
         result = str(exc)
     logger.info(LOG_MSG_UC, user_id, chat_id, restriction, result)
@@ -297,85 +311,87 @@ def delete_message(message, text):
 
 @flogger
 @context
-def captcha_thread(chat, user, data):
+@assert_keys('cid uid')
+def captcha_thread(ctx):
     # Waiting time is over to solve captcha
 
     # Delete group captcha
-    message = data[:, 'captchas', 'group', 'message']
+    message = ctx.mem[:, 'captchas', 'group', 'message']
     delete_message(message, 'delete captcha message')
 
     # Modify private captcha
-    if data[:, 'captchas', 'private', 'status'] is CaptchaStatus.WAITING:
-        message = data[:, 'captchas', 'private', 'message']
+    if ctx.mem[:, 'captchas', 'private', 'status'] is CaptchaStatus.WAITING:
+        message = ctx.mem[:, 'captchas', 'private', 'message']
         if message:
             result = message.edit_text(text=TIMEOUT_CAPTCHA_TEXT)
-            logger.debug(LOG_MSG_U, user.id, 'modified private captcha', result)
+            logger.debug(LOG_MSG_U, ctx.uid, 'modified private captcha', result)
 
     # Need to expulsion?
-    if data[:, 'captchas', 'group', 'status'] is not CaptchaStatus.SOLVED:
-        ban_user(chat, user, 'captcha not resolved in time')
-        delete_message(data[:, 'join'], 'delete captcha message')
-        del data[:, 'join']
-        del data[:, 'greet']
-        del data[:, 'restrict']
+    if ctx.mem[:, 'captchas', 'group', 'status'] is not CaptchaStatus.SOLVED:
+        ban_user(ctx.chat, ctx.user, 'captcha not resolved in time')
+        delete_message(ctx.mem[:, 'join'], 'delete captcha message')
+        del ctx.mem[:, 'join']
+        del ctx.mem[:, 'greet']
+        del ctx.mem[:, 'restrict']
 
     # Delete all captchas
-    del data[:, 'captchas']
-    data.delete_if_empty()
+    del ctx.mem[:, 'captchas']
+    ctx.mem.delete_if_empty()
 
 
 @flogger
 @context
-def greeting_thread(chat, data):
+@assert_keys('cid')
+def greeting_thread(ctx):
     # Waiting time is over: greet the users
 
     # Decrement num greeting
-    data[:, 'greeting'] = data[:, 'greeting'] - 1
+    ctx.mem[:, 'greeting'] = ctx.mem[:, 'greeting'] - 1
 
     names_list = []
-    for user_id in data.user_ids():
+    for user_id in ctx.mem.user_ids():
 
-        if data[:, user_id, 'captchas']:
+        if ctx.mem[:, user_id, 'captchas']:
             continue  # captcha still to be resolved
 
-        chatmember = chat.get_member(user_id)  # can change in time
+        chatmember = ctx.chat.get_member(user_id)  # can change in time
         if chatmember.status not in (chatmember.LEFT, chatmember.KICKED):
             # status can by: CREATOR, ADMINISTRATOR, MEMBER, RESTRICTED
             user = chatmember.user
-            if pass_ban_rules(chat, user):
+            if pass_ban_rules(ctx.chat, user):
                 # users must have first_name, last_name or username to be greeted
                 name = user.first_name or user.last_name or user.username or None
                 # ...and no one has greeted
-                if name and data[:, user_id, 'greet']:
+                if name and ctx.mem[:, user_id, 'greet']:
                     names_list.append(name)
-                    logger.debug(LOG_MSG_UC, user_id, chat.id, 'greet', True)
+                    logger.debug(LOG_MSG_UC, user_id, ctx.cid, 'greet', True)
             else:
-                message = data[:, user_id, 'join']
+                message = ctx.mem[:, user_id, 'join']
                 delete_message(message, 'delete service message (new user)')
-                del data[:, user_id, 'restrict']
+                del ctx.mem[:, user_id, 'restrict']
         else:
             # user is no longer present
-            del data[:, user_id, 'restrict']
+            del ctx.mem[:, user_id, 'restrict']
 
         # 'restrict' is eliminated in group_talk_handler (and in the expulsions)
-        del data[:, user_id, 'join']
-        del data[:, user_id, 'greet']
-        data.delete_if_empty(chat.id, user_id)
+        del ctx.mem[:, user_id, 'join']
+        del ctx.mem[:, user_id, 'greet']
+        ctx.mem.delete_if_empty(ctx.cid, user_id)
 
     if names_list:
-        names_list = data[:, 'previous', 'names':[]] + names_list
+        names_list = ctx.mem[:, 'previous', 'names':[]] + names_list
         if len(names_list) > 1:
             names = ', '.join(names_list[:-1]) + AND + names_list[-1]
             text = GREETING_PLURAL.format(html.escape(names))
         else:
             text = GREETING_SINGULAR.format(html.escape(names_list[0]))
 
-        message = chat.send_message(text=text)
+        message = ctx.chat.send_message(text=text)
 
-        delete_message(data[:, 'previous', 'message'], 'delete previous greeting')
+        delete_message(ctx.mem[:, 'previous', 'message'], 'delete previous greeting')
 
-        data[:, 'previous'] = {'names': names_list, 'message': message}
-        logger.debug(LOG_MSG_C, chat.id, 'send greeting', bool(message))
+        ctx.mem[:, 'previous'] = {'names': names_list, 'message': message}
+        logger.debug(LOG_MSG_C, ctx.cid, 'send greeting', bool(message))
 
 
 # ----------------------------------- #
@@ -389,31 +405,33 @@ def help_handler(bot, update):
 
 @flogger
 @context
-def new_user_handler(bot, update, job_queue, chat, data):
+@assert_keys('cid uid')
+def new_user_handler(ctx):
     ban = False
     new = False
-    for new_user in update.message.new_chat_members:
+    ctx.mem.set_keys(ctx.cid)  # user change
+    for new_user in ctx.message.new_chat_members:
 
-        if new_user.id == bot.id:
+        if new_user.id == ctx.bot.id:
             continue  # ignore myself
 
-        if pass_ban_rules(chat, new_user):
+        if pass_ban_rules(ctx.chat, new_user):
 
             if new_user.is_bot:
                 continue  # ignore other bots
 
             # Preventively limited to the user
-            restrict_user(bot, chat.id, new_user.id, UserRestriction.FULL)
+            restrict_user(ctx.bot, ctx.cid, new_user.id, UserRestriction.FULL)
 
             # Sending the message with the captcha to the group
-            captcha_token, captcha_message = send_captcha(chat, new_user)
+            captcha_token, captcha_message = send_captcha(ctx.chat, new_user)
             # Start timer
-            wait = job_queue.run_once(captcha_thread,
-                                      CAPTCHA_TIMER,
-                                      context=(chat, new_user))
+            wait = ctx.job_queue.run_once(captcha_thread,
+                                          CAPTCHA_TIMER,
+                                          context=(ctx.chat, new_user))
             # Save info
-            data[chat.id, new_user.id] = {
-                'join': update.message,
+            ctx.mem[:, new_user.id] = {
+                'join': ctx.message,
                 'greet': True,
                 'restrict': None,
                 'captchas': {
@@ -433,120 +451,120 @@ def new_user_handler(bot, update, job_queue, chat, data):
     if ban:
         # If several users entered together, can not be separated in the
         # service message, decided to erase all because it may contain spam
-        delete_message(update.message, 'delete service message (new user)')
+        delete_message(ctx.message, 'delete service message (new user)')
 
     if new:
         # Throw greeting thread
-        data[chat.id, 'greeting'] = data[chat.id, 'greeting':0] + 1
-        wait = job_queue.run_once(greeting_thread, GREETING_TIMER, context=(chat,))
+        ctx.mem[:, 'greeting'] = ctx.mem[:, 'greeting':0] + 1
+        wait = ctx.job_queue.run_once(greeting_thread,
+                                      GREETING_TIMER,
+                                      context=(ctx.chat,))
 
 
 @flogger
 @context
-def left_user_handler(bot, update, chat, user, data):
+@assert_keys('cid uid')
+def left_user_handler(ctx):
     # User banned by the bot?
-    if user.id == bot.id:
+    if ctx.from_bot:
         # Cleaning to avoid spam in name
-        delete_message(update.message, 'delete service message (left user)')
+        delete_message(ctx.message, 'delete service message (left user)')
 
-    data.set_keys(chat.id, update.message.left_chat_member.id)
+    ctx.mem.set_keys(ctx.cid, ctx.message.left_chat_member.id)
     # User can be before the bot...
-    # ...or bot might not have been operational when he left.
-    if data.contains_keys():
+    # ...or bot might not have been operational when he left
+    if ctx.mem.contains_keys():
 
         # Stop captchas timer
-        wait = data[:, 'captchas', 'wait']
+        wait = ctx.mem[:, 'captchas', 'wait']
         if wait:
             wait.schedule_removal()
 
         # Delete group captcha
-        message = data[:, 'captchas', 'group', 'message']
+        message = ctx.mem[:, 'captchas', 'group', 'message']
         delete_message(message, 'delete captcha message')
 
         # Modify private captcha
-        message = data[:, 'captchas', 'private', 'message']
+        message = ctx.mem[:, 'captchas', 'private', 'message']
         if message:
             result = message.edit_text(text=LEAVE_GROUP_CAPTCHA_TEXT)
-            logger.debug(LOG_MSG_U, user.id, 'modified private captcha', result)
+            logger.debug(LOG_MSG_U, ctx.uid, 'modified private captcha', result)
 
         # Delete all info
-        del data[:]
-        data.delete_if_empty()
+        del ctx.mem[:]
+        ctx.mem.delete_if_empty()
 
 
 @flogger
 @context
-def group_talk_handler(bot, update, chat, user, data):
-    if user.id == bot.id:
+@assert_keys('cid uid')
+def group_talk_handler(ctx):
+    if ctx.from_bot:
         return
 
-    if data[chat.id, 'greeting':0] > 0:
-        message = update.effective_message
+    if ctx.mem[ctx.cid, 'greeting':0] > 0:
 
         # Cancel greeting grouping
-        if data[chat.id, 'previous']:
-            del data[chat.id, 'previous']
-            logger.debug(LOG_MSG_C, chat.id, 'group next greeting', False)
+        if ctx.mem[ctx.cid, 'previous']:
+            del ctx.mem[ctx.cid, 'previous']
+            logger.debug(LOG_MSG_C, ctx.cid, 'group next greeting', False)
 
         # Greeting given by a member of the group
-        if GREET_FROM_MEMBER(message.text or ''):
-            for user_id, info in data[chat.id:{}].items():
+        if GREET_FROM_MEMBER(ctx.message.text or ''):
+            for user_id, info in ctx.mem[ctx.cid:{}].items():
                 if isinstance(user_id, int):
                     info['greet'] = False
-            logger.debug(LOG_MSG_C, chat.id, 'next greeting', False)
+            logger.debug(LOG_MSG_C, ctx.cid, 'next greeting', False)
 
         # If can not limit the user (available only for supergroups)
         # must delete their messages until the captcha is resolve
-        status = data[:, 'captchas', 'group', 'status']
+        status = ctx.mem[:, 'captchas', 'group', 'status']
         if status is not None and status is not CaptchaStatus.SOLVED:
-            delete_message(message, 'user needs to resolve captcha')
+            delete_message(ctx.message, 'user needs to resolve captcha')
 
         # Or until run out of time limitation
-        restrict = data[:, 'restrict']
+        restrict = ctx.mem[:, 'restrict']
         if restrict:
             if restrict + TEMPORARY_RESTRICTION > datetime.datetime.now():
-                if not message.text:
+                if not ctx.message.text:
                     # Only text allowed at beginning
-                    delete_message(message, 'temporarily limited user')
+                    delete_message(ctx.message, 'temporarily limited user')
             else:
-                del data[:, 'restrict']
-                data.delete_if_empty()
-                logger.debug(LOG_MSG_UC, user.id, chat.id, 'unrestricted', True)
+                del ctx.mem[:, 'restrict']
+                ctx.mem.delete_if_empty()
+                logger.debug(LOG_MSG_UC, ctx.uid, ctx.cid, 'unrestricted', True)
 
 
 def captcha_handler_answer(func):
     @functools.wraps(func)
-    def decorator(bot, update, chat, user, data):
-        answer = func(bot, update, chat, user, data)
-        update.callback_query.answer(answer, show_alert=bool(answer))
-        logger.debug(LOG_MSG_UC, user.id, chat.id, 'captcha handler', answer)
+    def decorator(ctx):
+        answer = func(ctx)
+        ctx.update.callback_query.answer(answer, show_alert=bool(answer))
+        logger.debug(LOG_MSG_UC, ctx.uid, ctx.cid, 'captcha handler', answer)
         return answer
     return decorator
 
 
 @flogger
 @context
+@assert_keys('cid uid')
 @captcha_handler_answer
-def captcha_handler(bot, update, chat, user, data):
-    message = update.effective_message
-    in_group = chat.type in (chat.GROUP, chat.SUPERGROUP)
-    in_private = chat.type == chat.PRIVATE
-
-    data.add_keys('captchas')
+def captcha_handler(ctx):
+    ctx.mem.add_keys('captchas')
 
     # Verify identity
-    if in_group:
-        data.add_keys('group')
-        if data[:, 'message'] != message:
+    if ctx.is_group:
+        ctx.mem.add_keys('group')
+        if ctx.mem[:, 'message'] != ctx.message:
             return None  # this captcha is from another user
-        chat_id = chat.id
+        chat_id = ctx.cid
 
-    elif in_private:
+    elif ctx.is_private:
         # Search which group the captcha corresponds to.
-        data.add_keys('private')
-        for chat_id in data.chat_ids():
-            data.mod_key(0, chat_id)
-            if data[:, 'message'] == message:
+        ctx.mem.add_keys('private')
+        for chat_id in ctx.mem.chat_ids():
+            ctx.mem.mod_key(0, chat_id)
+            if ctx.mem[:, 'message'] == ctx.message:
                 break
         else:
             return None  # time may have run out
@@ -554,48 +572,50 @@ def captcha_handler(bot, update, chat, user, data):
     else:
         return None  # not implemented for channels
 
-    # 'chat' can be group or private
-    # 'chat_id' is from the group always
+    # `ctx.chat` can be group or private
+    # `chat_id` is from the group always
 
-    token = update.callback_query.data or ''
+    token = ctx.update.callback_query.data or ''
 
     # New captcha
     if hmac.compare_digest(token, NEW_CAPTCHA_TOKEN):
-        new_token, _ = send_captcha(chat, user, message)
-        data[:, 'token'] = new_token
+        new_token, _ = send_captcha(ctx.chat, ctx.user, ctx.message)
+        ctx.mem[:, 'token'] = new_token
         return None  # nothing else to do
 
     # Correct answer
-    if hmac.compare_digest(token, data[:, 'token']):
-        data[:, 'status'] = CaptchaStatus.SOLVED
-        text = SOLVED_CAPTCHA_TEXT1.format(get_mention_html(user))
-        if in_private:
+    if hmac.compare_digest(token, ctx.mem[:, 'token']):
+        ctx.mem[:, 'status'] = CaptchaStatus.SOLVED
+        text = SOLVED_CAPTCHA_TEXT1.format(get_mention_html(ctx.user))
+
+        if ctx.is_private:
             # Modify the captcha of the group as well
-            data.mod_key(3, 'group')
-            data[:, 'status'] = CaptchaStatus.SOLVED
-            data[:, 'message'].edit_text(text=text)
+            ctx.mem.mod_key(3, 'group')
+            ctx.mem[:, 'status'] = CaptchaStatus.SOLVED
+            ctx.mem[:, 'message'].edit_text(text=text)
             text = SOLVED_CAPTCHA_TEXT2
-        message.edit_text(text=text)
+
+        ctx.message.edit_text(text=text)
         # Accepted but temporarily limited
         until_date = datetime.datetime.now() + TEMPORARY_RESTRICTION
-        data[chat_id, user.id, 'restrict'] = until_date
-        restrict_user(bot, chat_id, user.id, UserRestriction.TEMP)
+        ctx.mem[chat_id, ctx.uid, 'restrict'] = until_date
+        restrict_user(ctx.bot, chat_id, ctx.uid, UserRestriction.TEMP)
         return SOLVED_CAPTCHA_ALERT
 
     # Wrong answer
-    data[:, 'status'] = CaptchaStatus.WRONG
-    if in_group:
+    ctx.mem[:, 'status'] = CaptchaStatus.WRONG
+    if ctx.is_group:
         # Link to second opportunity
         parameters = {
-            'text': WRONG_CAPTCHA_TEXT1.format(get_mention_html(user)),
+            'text': WRONG_CAPTCHA_TEXT1.format(get_mention_html(ctx.user)),
             'parse_mode': 'HTML',
             'reply_markup': InlineKeyboardMarkup([[
-                get_button(CHANCE_CAPTCHA_TEXT, url=f't.me/{bot.username}')
+                get_button(CHANCE_CAPTCHA_TEXT, url=f't.me/{ctx.bot.username}')
             ]]),
         }
     else:
         parameters = {'text': WRONG_CAPTCHA_TEXT2}
-    message.edit_text(**parameters)
+    ctx.message.edit_text(**parameters)
     return WRONG_CAPTCHA_ALERT
 
 
@@ -605,18 +625,19 @@ def captcha_handler(bot, update, chat, user, data):
 
 @flogger
 @context
-def menu_handler(bot, update, chat, user, data):
-    data.add_keys('captchas')
+@assert_keys('cid uid')
+def menu_handler(ctx):
+    ctx.mem.add_keys('captchas')
     wrongs = {}
     waits = []
-    for chat_id in data.chat_ids():
-        data.mod_key(0, chat_id)
+    for chat_id in ctx.mem.chat_ids():
+        ctx.mem.mod_key(0, chat_id)
 
-        message = data[:, 'group', 'message']
+        message = ctx.mem[:, 'group', 'message']
         title = html.escape(message.chat.title)
 
-        wrong_group = data[:, 'group', 'status'] is CaptchaStatus.WRONG
-        private = data[:, 'private', 'status']
+        wrong_group = ctx.mem[:, 'group', 'status'] is CaptchaStatus.WRONG
+        private = ctx.mem[:, 'private', 'status']
 
         if wrong_group and private is None:
             wrongs[f'{len(wrongs)+1}• {title}'] = chat_id
@@ -626,92 +647,96 @@ def menu_handler(bot, update, chat, user, data):
             waits.append('• {}{}"{}"'.format(time_to_text(wait), FOR, title))
 
     if wrongs:
-        data['privates', user.id] = wrongs
+        ctx.mem['privates', ctx.uid] = wrongs
         keyboard = ReplyKeyboardMarkup([[YES, NO]], one_time_keyboard=True)
-        message = update.message.reply_text(text=START_MENU_TEXT1,
-                                            reply_markup=keyboard)
-        logger.debug(LOG_MSG_P, user.id, 'start menu', bool(message))
+        message = ctx.message.reply_text(text=START_MENU_TEXT1,
+                                         reply_markup=keyboard)
+        logger.debug(LOG_MSG_P, ctx.uid, 'start menu', bool(message))
         return MenuStep.INIT
 
     if waits:
         text = START_MENU_TEXT2.format('\n'.join(waits))
         keyboard = ReplyKeyboardRemove()
-        message = update.message.reply_text(text=text, reply_markup=keyboard)
-        logger.debug(LOG_MSG_P, user.id, 'must wait', bool(message))
+        message = ctx.message.reply_text(text=text, reply_markup=keyboard)
+        logger.debug(LOG_MSG_P, ctx.uid, 'must wait', bool(message))
         return MenuStep.STOP
 
-    send_help(bot, chat.id)
+    send_help(ctx.bot, ctx.cid)
     return MenuStep.STOP
 
 
 @flogger
 @context
-def init_handler(update, chat, user, data):
-    wrongs = data['privates', user.id]
+@assert_keys('cid uid')
+def init_handler(ctx):
+    wrongs = ctx.mem['privates', ctx.uid]
     if len(wrongs) > 1:
         keyboard = ReplyKeyboardMarkup([[key] for key in wrongs],
                                        one_time_keyboard=True)
-        message = update.message.reply_text(text=INIT_MENU_TEXT1,
-                                            reply_markup=keyboard)
-        logger.debug(LOG_MSG_P, user.id, 'select chat', bool(message))
+        message = ctx.message.reply_text(text=INIT_MENU_TEXT1,
+                                         reply_markup=keyboard)
+        logger.debug(LOG_MSG_P, ctx.uid, 'select chat', bool(message))
         return MenuStep.CHAT
 
     key = list(wrongs)[0]
-    update.message.reply_text(text=INIT_MENU_TEXT2.format(key),
-                              reply_markup=ReplyKeyboardRemove())
-    return chat_process(update, chat, user, data, key)
+    ctx.message.reply_text(text=INIT_MENU_TEXT2.format(key),
+                           reply_markup=ReplyKeyboardRemove())
+    return chat_process(ctx, key)
 
 
 @flogger
 @context
-def chat_handler(update, chat, user, data):
-    key = update.message.text or ''
-    update.message.reply_text(text=CHAT_MENU_TEXT.format(html.escape(key)),
-                              reply_markup=ReplyKeyboardRemove())
-    return chat_process(update, chat, user, data, key)
+@assert_keys('cid uid')
+def chat_handler(ctx):
+    key = ctx.message.text or ''
+    ctx.message.reply_text(text=CHAT_MENU_TEXT.format(html.escape(key)),
+                           reply_markup=ReplyKeyboardRemove())
+    return chat_process(ctx, key)
 
 
 @flogger
-def chat_process(update, chat, user, data, key):
-    chat_id = data['privates', user.id, key]
+def chat_process(ctx, key):
+    chat_id = ctx.mem['privates', ctx.uid, key]
     if chat_id:
-        del data['privates', user.id]
+        del ctx.mem['privates', ctx.uid]
 
-        token, message = send_captcha(chat, user)
-        data[chat_id, user.id, 'captchas', 'private'] = {
+        token, message = send_captcha(ctx.chat, ctx.user)
+        ctx.mem[chat_id, ctx.uid, 'captchas', 'private'] = {
             'message': message,
             'status': CaptchaStatus.WAITING,
             'token': token,
         }
-        logger.debug(LOG_MSG_P, user.id, 'send captcha', bool(message))
+        logger.debug(LOG_MSG_P, ctx.uid, 'send captcha', bool(message))
         return MenuStep.STOP
 
-    return incorrect_process(update)
+    return incorrect_process(ctx)
 
 
 @flogger
 @context
-def stop_handler(update, user, data):
-    if data.contains_keys('privates', user.id):
-        del data['privates', user.id]
+@assert_keys('cid uid')
+def stop_handler(ctx):
+    if ctx.mem.contains_keys('privates', ctx.uid):
+        del ctx.mem['privates', ctx.uid]
 
-    message = update.message.reply_text(text=CANCEL_MENU_TEXT,
-                                        reply_markup=ReplyKeyboardRemove())
-    logger.debug(LOG_MSG_P, user.id, 'cancel menu', bool(message))
+    message = ctx.message.reply_text(text=CANCEL_MENU_TEXT,
+                                     reply_markup=ReplyKeyboardRemove())
+    logger.debug(LOG_MSG_P, ctx.uid, 'cancel menu', bool(message))
     return MenuStep.STOP
 
 
 @flogger
-@run_async
-def incorrect_handler(_bot, update):
-    incorrect_process(update)
+@context
+@assert_keys('cid uid')
+def incorrect_handler(ctx):
+    incorrect_process(ctx)
 
 
 @flogger
-def incorrect_process(update):
-    user_id = update.message.from_user.id
-    message = update.message.reply_text(text=INCORRECT_MENU_TEXT)
-    logger.debug(LOG_MSG_P, user_id, 'incorrect option', bool(message))
+@run_async
+def incorrect_process(ctx):
+    message = ctx.message.reply_text(text=INCORRECT_MENU_TEXT)
+    logger.debug(LOG_MSG_P, ctx.uid, 'incorrect option', bool(message))
 
 
 # ----------------------------------- #
@@ -804,7 +829,7 @@ def run():
     logger.setLevel(level)
 
     if args.verbose < 3:
-        # Mute telegram (show only bot)
+        # Mute all, show only the bot
         logger_names = (
             'JobQueue',
             'telegram.bot',

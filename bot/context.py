@@ -9,10 +9,75 @@ from telegram.ext import Job
 from debug import flogger
 
 
-class Context():
+class Context:
+
+    '''Contains the data of a request.'''
+
+    def __init__(self, mem, args, kwargs):
+        self.mem = mem
+        self.bot = args[0]
+        self.__dict__.update(kwargs)
+
+        if isinstance(args[1], Update):
+            self.update = args[1]
+            self.chat = self.update.effective_chat
+            self.user = self.update.effective_user
+            self.message = self.update.effective_message
+
+        elif isinstance(args[1], Job):
+            self.job = args[1]
+
+            context = self.job.context or []
+            if not isinstance(context, (list, tuple)):
+                context = [context]
+            num = len(context)
+            if num > 0:
+                self.chat = context[0]
+            if num > 1:
+                self.user = context[1]
+
+    def __repr__(self):
+        return f'«{self.__class__.__name__}»'
+
+    @flogger
+    def __contains__(self, var):
+        return var in self.__dict__
+
+    @flogger
+    def __setitem__(self, var, value):
+        self.__dict__[var] = value
+
+    @flogger
+    def __delitem__(self, var):
+        del self.__dict__[var]
+
+    @flogger
+    def __getitem__(self, var):
+        if var == 'cid':
+            return self.__dict__['chat'].id
+
+        if var == 'uid':
+            return self.__dict__['user'].id
+
+        if var == 'from_bot':
+            return self.__dict__['user'].id == self.__dict__['bot'].id
+
+        if var == 'is_group':
+            chat = self.__dict__['chat']
+            return chat.type in (chat.GROUP, chat.SUPERGROUP)
+
+        if var == 'is_private':
+            chat = self.__dict__['chat']
+            return chat.type == chat.PRIVATE
+
+        return self.__dict__.get(var)  # Caution: does not throw KeyError
+
+
+class Contextualizer:
     '''
-    The Context object contains the data structure stored in memory
+    The Contextualizer object contains the data structure stored in memory
     and a lock for multithreading to access the data.
+    Data is stored between requests.
     '''
 
     __slots__ = ('__lock', '__data', '__keys')
@@ -23,7 +88,7 @@ class Context():
         self.__keys = []
 
     def __repr__(self):
-        return '«Context»'
+        return f'«{self.__class__.__name__}»'
 
 
     @flogger
@@ -85,6 +150,14 @@ class Context():
             data = getattr(data, method)(key, {})
 
         return data, keys[-1]
+
+
+    @flogger
+    def get_keys(self):
+        '''
+        Returns the list of keys.
+        '''
+        return self.__keys
 
 
     @flogger
@@ -159,54 +232,21 @@ class Context():
 
     def __call__(self, func):
         '''
-        Decorator, safe in threads, to give access to data stored in memory,
-        calls the function that decorates with the parameters it needs.
+        Decorator, safe in threads, to give access to data stored in memory.
         '''
         @functools.wraps(func)
         def decorator(*args, **kwargs):
-
-            bot = args[0]
-            kwargs['bot'] = bot
-            kwargs['data'] = self
-
-            chat = None
-            user = None
-
-            if isinstance(args[1], Update):
-                update = args[1]
-                kwargs['update'] = update
-                chat = update.effective_chat
-                user = update.effective_user
-
-            elif isinstance(args[1], Job):
-                job = args[1]
-                kwargs['job'] = job
-                if job.context:
-                    if not isinstance(job.context, (list, tuple)):
-                        job.context = (job.context,)
-                else:
-                    job.context = []
-                conlen = len(job.context)
-                if conlen > 0:
-                    chat = job.context[0]
-                if conlen > 1:
-                    user = job.context[1]
+            ctx = Context(self, args, kwargs)
 
             keys = []
-            if chat:
-                kwargs['chat'] = chat
-                keys.append(chat.id)
-                if user:
-                    kwargs['user'] = user
-                    keys.append(user.id)
-
-            # Vision: "from what I have, I give you what you need"
-            required_vars = func.__code__.co_varnames
-            available_vars = {k: kwargs[k] for k in kwargs if k in required_vars}
+            if ctx.chat:
+                keys.append(ctx.chat.id)
+                if ctx.user:
+                    keys.append(ctx.user.id)
 
             with self.__lock:
                 self.set_keys(*keys)
-                result = func(**available_vars)
+                result = func(ctx)
 
             return result
         return decorator
