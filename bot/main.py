@@ -739,6 +739,14 @@ def incorrect_process(ctx):
     logger.debug(LOG_MSG_P, ctx.uid, 'incorrect option', bool(message))
 
 
+@flogger
+@context
+@assert_keys('cid uid')
+def debug_handler(ctx):
+    from debug import __format
+    logger.debug('CTX.MEM.DATA: %s', __format(ctx.mem.get_data()))
+
+
 # ----------------------------------- #
 
 
@@ -762,6 +770,8 @@ def main(polling, clean):
     logger.info('Initializing bot...')
     updater = Updater(TOKEN)
     dis = updater.dispatcher
+
+    dis.add_handler(CommandHandler('debug', debug_handler, ~Filters.private))
 
     # Group handlers
     dis.add_handler(CommandHandler('start', help_handler, ~Filters.private))

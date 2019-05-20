@@ -53,24 +53,28 @@ class Context:
 
     @flogger
     def __getitem__(self, var):
+        if var in self.__dict__:
+            return self.__dict__[var]
+        return getattr(self, var)
+
+    @flogger
+    def __getattr__(self, var):
         if var == 'cid':
-            return self.__dict__['chat'].id
+            return self.chat.id
 
         if var == 'uid':
-            return self.__dict__['user'].id
+            return self.user.id
 
         if var == 'from_bot':
-            return self.__dict__['user'].id == self.__dict__['bot'].id
+            return self.user.id == self.bot.id
 
         if var == 'is_group':
-            chat = self.__dict__['chat']
-            return chat.type in (chat.GROUP, chat.SUPERGROUP)
+            return self.chat.type in (self.chat.GROUP, self.chat.SUPERGROUP)
 
         if var == 'is_private':
-            chat = self.__dict__['chat']
-            return chat.type == chat.PRIVATE
+            return self.chat.type == self.chat.PRIVATE
 
-        return self.__dict__.get(var)  # Caution: does not throw KeyError
+        return None  # Caution: does not throw KeyError or AttributeError
 
 
 class Contextualizer:
@@ -150,6 +154,14 @@ class Contextualizer:
             data = getattr(data, method)(key, {})
 
         return data, keys[-1]
+
+
+    @flogger
+    def get_data(self):
+        '''
+        Returns the data.
+        '''
+        return self.__data
 
 
     @flogger

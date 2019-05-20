@@ -25,12 +25,17 @@ OBJECTS = (telegram.bot.Bot, telegram.update.Update, telegram.message.Message,
            threading.Thread, types.GeneratorType)
 
 
-def __format(obj, kvsep=': '):
+def __format(obj, kvsep=': ', quotes=True):
+    # pylint: disable=too-many-return-statements
+
     if isinstance(obj, (list, tuple)):
         return '[{}]'.format(', '.join(__format(o) for o in obj))
 
     if isinstance(obj, dict):
-        return '{{{}}}'.format(', '.join(''.join((__format(k), kvsep, __format(v)))
+        quotes = False if '=' in kvsep else quotes
+        return '{{{}}}'.format(', '.join(''.join((__format(k, quotes=quotes),
+                                                  kvsep,
+                                                  __format(v)))
                                          for k, v in obj.items()))
 
     if isinstance(obj, (datetime.datetime, datetime.timedelta)):
@@ -41,6 +46,9 @@ def __format(obj, kvsep=': '):
 
     if isinstance(obj, enum.Enum):
         return str(obj)
+
+    if isinstance(obj, str) and not quotes:
+        return obj
 
     return repr(obj)
 
