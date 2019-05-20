@@ -157,7 +157,7 @@ def assert_keys(key_names):
     def wrapper(func):
         @functools.wraps(func)
         def wrapped(ctx):
-            keys = [getattr(ctx, key) for key in key_names.split()]
+            keys = [ctx[key] for key in key_names.split()]
             assert ctx.mem.get_keys() == keys, 'keys: {func.__module__}'
             return func(ctx)
         return wrapped
