@@ -16,7 +16,6 @@ TASK SKETCH:
                     'group': {···},
                     'private': {}}
     - throw greeting                        → thread (job)
-      - increment num greeting
 
   left_user_handler:
 
@@ -30,7 +29,6 @@ TASK SKETCH:
   group_talk_handler:
 
     - exclude yourself
-      (if pending greeting)
     - cancel greeting grouping
     - if anyone greeted                     → cancel pending greetings
     - new user on hold?                     → delete message
@@ -64,7 +62,6 @@ TASK SKETCH:
 
   greeting_thread:                          (waiting time is over: greet the users)
 
-    - decrement num greeting
     - per user without captchas
       - reobtain user data
       - apply banning rules                 → expulsion user
@@ -105,7 +102,6 @@ DATA STRUCTURE:
               'names': [STR_name],
               'message': OBJ_message,
           },
-          'greeting': INT_num,                  know is a pending greeting
       },
       'privates': {                             for use in private menu
           user_id: {

@@ -55,26 +55,36 @@ class Context:
     def __getitem__(self, var):
         if var in self.__dict__:
             return self.__dict__[var]
-        return getattr(self, var)
+        return getattr(self, var, None)
 
     @flogger
     def __getattr__(self, var):
-        if var == 'cid':
-            return self.chat.id
+        return self.__dict__.get(var)
 
-        if var == 'uid':
-            return self.user.id
+    @property
+    @flogger
+    def cid(self):
+        return self.chat.id
 
-        if var == 'from_bot':
-            return self.user.id == self.bot.id
+    @property
+    @flogger
+    def uid(self):
+        return self.user.id
 
-        if var == 'is_group':
-            return self.chat.type in (self.chat.GROUP, self.chat.SUPERGROUP)
+    @property
+    @flogger
+    def from_bot(self):
+        return self.user.id == self.bot.id
 
-        if var == 'is_private':
-            return self.chat.type == self.chat.PRIVATE
+    @property
+    @flogger
+    def is_group(self):
+        return self.chat.type in (self.chat.GROUP, self.chat.SUPERGROUP)
 
-        return None  # Caution: does not throw KeyError or AttributeError
+    @property
+    @flogger
+    def is_private(self):
+        return self.chat.type == self.chat.PRIVATE
 
 
 class Contextualizer:

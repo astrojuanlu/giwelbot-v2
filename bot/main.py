@@ -157,8 +157,11 @@ def assert_keys(key_names):
     def wrapper(func):
         @functools.wraps(func)
         def wrapped(ctx):
-            keys = [ctx[key] for key in key_names.split()]
-            assert ctx.mem.get_keys() == keys, 'keys: {func.__module__}'
+            current_keys = ctx.mem.get_keys()
+            expected_keys = [getattr(ctx, key) for key in key_names.split()]
+            assert current_keys == expected_keys, (f'{func.__module__} '
+                                                   f'{current_keys} != '
+                                                   f'{expected_keys}')
             return func(ctx)
         return wrapped
     return wrapper
@@ -345,9 +348,6 @@ def captcha_thread(ctx):
 def greeting_thread(ctx):
     # Waiting time is over: greet the users
 
-    # Decrement num greeting
-    ctx.mem[:, 'greeting'] = ctx.mem[:, 'greeting'] - 1
-
     names_list = []
     for user_id in ctx.mem.user_ids():
 
@@ -455,7 +455,6 @@ def new_user_handler(ctx):
 
     if new:
         # Throw greeting thread
-        ctx.mem[:, 'greeting'] = ctx.mem[:, 'greeting':0] + 1
         wait = ctx.job_queue.run_once(greeting_thread,
                                       GREETING_TIMER,
                                       context=(ctx.chat,))
@@ -502,37 +501,35 @@ def group_talk_handler(ctx):
     if ctx.from_bot:
         return
 
-    if ctx.mem[ctx.cid, 'greeting':0] > 0:
+    # Cancel greeting grouping
+    if ctx.mem[ctx.cid, 'previous']:
+        del ctx.mem[ctx.cid, 'previous']
+        logger.debug(LOG_MSG_C, ctx.cid, 'group next greeting', False)
 
-        # Cancel greeting grouping
-        if ctx.mem[ctx.cid, 'previous']:
-            del ctx.mem[ctx.cid, 'previous']
-            logger.debug(LOG_MSG_C, ctx.cid, 'group next greeting', False)
+    # Greeting given by a member of the group
+    if GREET_FROM_MEMBER(ctx.message.text or ''):
+        for user_id, info in ctx.mem[ctx.cid:{}].items():
+            if isinstance(user_id, int):
+                info['greet'] = False
+        logger.debug(LOG_MSG_C, ctx.cid, 'next greeting', False)
 
-        # Greeting given by a member of the group
-        if GREET_FROM_MEMBER(ctx.message.text or ''):
-            for user_id, info in ctx.mem[ctx.cid:{}].items():
-                if isinstance(user_id, int):
-                    info['greet'] = False
-            logger.debug(LOG_MSG_C, ctx.cid, 'next greeting', False)
+    # If can not limit the user (available only for supergroups)
+    # must delete their messages until the captcha is resolve
+    status = ctx.mem[:, 'captchas', 'group', 'status']
+    if status is not None and status is not CaptchaStatus.SOLVED:
+        delete_message(ctx.message, 'user needs to resolve captcha')
 
-        # If can not limit the user (available only for supergroups)
-        # must delete their messages until the captcha is resolve
-        status = ctx.mem[:, 'captchas', 'group', 'status']
-        if status is not None and status is not CaptchaStatus.SOLVED:
-            delete_message(ctx.message, 'user needs to resolve captcha')
-
-        # Or until run out of time limitation
-        restrict = ctx.mem[:, 'restrict']
-        if restrict:
-            if restrict + TEMPORARY_RESTRICTION > datetime.datetime.now():
-                if not ctx.message.text:
-                    # Only text allowed at beginning
-                    delete_message(ctx.message, 'temporarily limited user')
-            else:
-                del ctx.mem[:, 'restrict']
-                ctx.mem.delete_if_empty()
-                logger.debug(LOG_MSG_UC, ctx.uid, ctx.cid, 'unrestricted', True)
+    # Or until run out of time limitation
+    restrict = ctx.mem[:, 'restrict']
+    if restrict:
+        if restrict + TEMPORARY_RESTRICTION > datetime.datetime.now():
+            if not ctx.message.text:
+                # Only text allowed at beginning
+                delete_message(ctx.message, 'temporarily limited user')
+        else:
+            del ctx.mem[:, 'restrict']
+            ctx.mem.delete_if_empty()
+            logger.debug(LOG_MSG_UC, ctx.uid, ctx.cid, 'unrestricted', True)
 
 
 def captcha_handler_answer(func):
