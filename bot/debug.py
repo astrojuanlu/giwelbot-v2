@@ -24,6 +24,10 @@ OBJECTS = (telegram.bot.Bot, telegram.update.Update, telegram.message.Message,
            telegram.ext.jobqueue.Job, telegram.ext.jobqueue.JobQueue,
            threading.Thread, types.GeneratorType)
 
+CO1 = '\033[40m\033[33m'
+CO2 = '\033[40m\033[31m'
+CLR = '\033[0m'
+
 
 def __format(obj, kvsep=': ', quotes=True):
     # pylint: disable=too-many-return-statements
@@ -66,8 +70,8 @@ def flogger(func):
     logger = logging.getLogger(func.__module__)
     @functools.wraps(func)
     def decorator(*args, **kwargs):
-        logger.debug('Entering: %s: %s', func.__name__, __format_args(args, kwargs))
+        logger.debug('%sEntering: %s: %s%s', CO1, func.__name__, __format_args(args, kwargs), CLR)
         result = func(*args, **kwargs)
-        logger.debug('Exiting: %s: %s', func.__name__, __format(result))
+        logger.debug('%sExiting: %s: %s%s', CO2, func.__name__, __format(result), CLR)
         return result
     return decorator
