@@ -34,16 +34,16 @@ HOST = 'https://test-welcome-tg-bot.herokuapp.com'
 BIND = '0.0.0.0'
 
 
-GREETING_TIMER = 1 * 60  # seconds
+GREETING_TIMER = 2 * 60  # seconds
 GREETING_TIMER_TEXT = time_to_text(GREETING_TIMER)
 
-CAPTCHA_TIMER = 1 * 60  # seconds
+CAPTCHA_TIMER = 2 * 60  # seconds
 CAPTCHA_TIMER_TEXT = time_to_text(CAPTCHA_TIMER)
 
-ATTEMPT_INTERVAL = datetime.timedelta(seconds=90)  # for attempts to join
+ATTEMPT_INTERVAL = datetime.timedelta(minutes=3)  # for attempts to join
 ATTEMPT_INTERVAL_TEXT = time_to_text(ATTEMPT_INTERVAL)
 
-TEMPORARY_RESTRICTION = datetime.timedelta(seconds=90)  # for share media
+TEMPORARY_RESTRICTION = datetime.timedelta(minutes=3)  # for share media
 TEMPORARY_RESTRICTION_TEXT = time_to_text(TEMPORARY_RESTRICTION)
 
 
@@ -147,6 +147,12 @@ class CaptchaStatus(enum.Enum):
     WAITING = 0
     SOLVED = 1
     WRONG = 2
+
+
+KEYBOARD_COMMON = {
+    'resize_keyboard': True,
+    'one_time_keyboard': True,
+}
 
 
 # ----------------------------------- #
@@ -332,7 +338,7 @@ def captcha_thread(ctx):
     # Need to expulsion?
     if ctx.mem[:, 'captchas', 'group', 'status'] is not CaptchaStatus.SOLVED:
         ban_user(ctx.chat, ctx.user, 'captcha not resolved in time')
-        delete_message(ctx.mem[:, 'join'], 'delete captcha message')
+        delete_message(ctx.mem[:, 'join'], 'delete service message (new user)')
         del ctx.mem[:, 'join']
         del ctx.mem[:, 'greet']
         del ctx.mem[:, 'restrict']
@@ -348,6 +354,7 @@ def captcha_thread(ctx):
 def greeting_thread(ctx):
     # Waiting time is over: greet the users
 
+    user_id_list = []
     names_list = []
     for user_id in ctx.mem.user_ids():
 
@@ -376,6 +383,10 @@ def greeting_thread(ctx):
         # 'restrict' is eliminated in group_talk_handler (and in the expulsions)
         del ctx.mem[:, user_id, 'join']
         del ctx.mem[:, user_id, 'greet']
+        user_id_list.append(user_id)
+
+    # `ctx.mem.delete_if_empty` can modify the list of users (`ctx.mem.user_ids`)
+    for user_id in user_id_list:
         ctx.mem.delete_if_empty(ctx.cid, user_id)
 
     if names_list:
@@ -522,14 +533,14 @@ def group_talk_handler(ctx):
     # Or until run out of time limitation
     restrict = ctx.mem[:, 'restrict']
     if restrict:
-        if restrict + TEMPORARY_RESTRICTION > datetime.datetime.now():
+        if restrict > datetime.datetime.now():
             if not ctx.message.text:
                 # Only text allowed at beginning
                 delete_message(ctx.message, 'temporarily limited user')
         else:
             del ctx.mem[:, 'restrict']
             ctx.mem.delete_if_empty()
-            logger.debug(LOG_MSG_UC, ctx.uid, ctx.cid, 'unrestricted', True)
+            logger.info(LOG_MSG_UC, ctx.uid, ctx.cid, 'unrestricted', True)
 
 
 def captcha_handler_answer(func):
@@ -629,23 +640,23 @@ def menu_handler(ctx):
     waits = []
     for chat_id in ctx.mem.chat_ids():
         ctx.mem.mod_key(0, chat_id)
-
         message = ctx.mem[:, 'group', 'message']
-        title = html.escape(message.chat.title)
+        if message:
+            title = html.escape(message.chat.title)
 
-        wrong_group = ctx.mem[:, 'group', 'status'] is CaptchaStatus.WRONG
-        private = ctx.mem[:, 'private', 'status']
+            wrong_group = ctx.mem[:, 'group', 'status'] is CaptchaStatus.WRONG
+            private = ctx.mem[:, 'private', 'status']
 
-        if wrong_group and private is None:
-            wrongs[f'{len(wrongs)+1}• {title}'] = chat_id
+            if wrong_group and private is None:
+                wrongs[f'{len(wrongs)+1}• {title}'] = chat_id
 
-        elif private is CaptchaStatus.WRONG:
-            wait = message.date + ATTEMPT_INTERVAL - datetime.datetime.now()
-            waits.append('• {}{}"{}"'.format(time_to_text(wait), FOR, title))
+            elif private is CaptchaStatus.WRONG:
+                wait = message.date + ATTEMPT_INTERVAL - datetime.datetime.now()
+                waits.append('• {}{}"{}"'.format(time_to_text(wait), FOR, title))
 
     if wrongs:
         ctx.mem['privates', ctx.uid] = wrongs
-        keyboard = ReplyKeyboardMarkup([[YES, NO]], one_time_keyboard=True)
+        keyboard = ReplyKeyboardMarkup([[YES, NO]], **KEYBOARD_COMMON)
         message = ctx.message.reply_text(text=START_MENU_TEXT1,
                                          reply_markup=keyboard)
         logger.debug(LOG_MSG_P, ctx.uid, 'start menu', bool(message))
@@ -669,7 +680,7 @@ def init_handler(ctx):
     wrongs = ctx.mem['privates', ctx.uid]
     if len(wrongs) > 1:
         keyboard = ReplyKeyboardMarkup([[key] for key in wrongs],
-                                       one_time_keyboard=True)
+                                       **KEYBOARD_COMMON)
         message = ctx.message.reply_text(text=INIT_MENU_TEXT1,
                                          reply_markup=keyboard)
         logger.debug(LOG_MSG_P, ctx.uid, 'select chat', bool(message))

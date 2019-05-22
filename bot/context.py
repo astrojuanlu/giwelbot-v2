@@ -1,5 +1,6 @@
 # -*- coding: UTF-8 -*-
 
+import logging
 import functools
 import threading
 
@@ -39,50 +40,40 @@ class Context:
     def __repr__(self):
         return f'«{self.__class__.__name__}»'
 
-    @flogger
     def __contains__(self, var):
         return var in self.__dict__
 
-    @flogger
     def __setitem__(self, var, value):
         self.__dict__[var] = value
 
-    @flogger
     def __delitem__(self, var):
         del self.__dict__[var]
 
-    @flogger
     def __getitem__(self, var):
         if var in self.__dict__:
             return self.__dict__[var]
         return getattr(self, var, None)
 
-    @flogger
     def __getattr__(self, var):
         return self.__dict__.get(var)
 
     @property
-    @flogger
     def cid(self):
         return self.chat.id
 
     @property
-    @flogger
     def uid(self):
         return self.user.id
 
     @property
-    @flogger
     def from_bot(self):
         return self.user.id == self.bot.id
 
     @property
-    @flogger
     def is_group(self):
         return self.chat.type in (self.chat.GROUP, self.chat.SUPERGROUP)
 
     @property
-    @flogger
     def is_private(self):
         return self.chat.type == self.chat.PRIVATE
 
@@ -94,12 +85,13 @@ class Contextualizer:
     Data is stored between requests.
     '''
 
-    __slots__ = ('__lock', '__data', '__keys')
+    __slots__ = ('__lock', '__data', '__keys', 'logger')
 
     def __init__(self):
         self.__lock = threading.Lock()
         self.__data = {}
         self.__keys = []
+        self.logger = logging.getLogger(__name__)
 
     def __repr__(self):
         return f'«{self.__class__.__name__}»'
@@ -144,7 +136,11 @@ class Contextualizer:
         Delete a value from the data.
         '''
         data, key = self.__get_last_data_key(keys, 'get')
-        del data[key]
+        try:
+            del data[key]
+        except KeyError:
+            self.logger.debug('%s.__delitem__ KeyError "%s" (keys=%s)',
+                              self.__class__.__name__, key, keys)
 
 
     #@flogger

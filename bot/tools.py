@@ -62,6 +62,7 @@ def time_to_text(delta):
         days = 0
         hms = parts[0]
     hour, minute, second = hms.split(':')
+    second = second.split('.')[0]
     phrase = []
     items = (
         (int(days), 'día', 'días'),
@@ -74,9 +75,9 @@ def time_to_text(delta):
             phrase.append(f'{number} {singular}')
         elif number != 0:
             phrase.append(f'{number} {plural}')
+
     if len(phrase) == 1:
         return phrase[-1]
-
     return ', '.join(phrase[:-1]) + ' y ' + phrase[-1]
 
 

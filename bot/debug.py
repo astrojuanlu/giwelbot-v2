@@ -24,14 +24,12 @@ OBJECTS = (telegram.bot.Bot, telegram.update.Update, telegram.message.Message,
            telegram.ext.jobqueue.Job, telegram.ext.jobqueue.JobQueue,
            threading.Thread, types.GeneratorType)
 
-CO1 = '\033[40m\033[33m'
-CO2 = '\033[40m\033[31m'
-CLR = '\033[0m'
+COLOR_1 = '\033[40m\033[36m'
+COLOR_2 = '\033[40m\033[37m'
+RESET_C = '\033[0m'
 
 
 def __format(obj, kvsep=': ', quotes=True):
-    # pylint: disable=too-many-return-statements
-
     if isinstance(obj, (list, tuple)):
         return '[{}]'.format(', '.join(__format(o) for o in obj))
 
@@ -51,10 +49,7 @@ def __format(obj, kvsep=': ', quotes=True):
     if isinstance(obj, enum.Enum):
         return str(obj)
 
-    if isinstance(obj, str) and not quotes:
-        return obj
-
-    return repr(obj)
+    return obj if isinstance(obj, str) and not quotes else repr(obj)
 
 
 def __format_args(args, kwargs):
@@ -70,8 +65,10 @@ def flogger(func):
     logger = logging.getLogger(func.__module__)
     @functools.wraps(func)
     def decorator(*args, **kwargs):
-        logger.debug('%sEntering: %s: %s%s', CO1, func.__name__, __format_args(args, kwargs), CLR)
+        logger.debug('%sEntering: %s: %s%s', COLOR_1, func.__name__,
+                     __format_args(args, kwargs), RESET_C)
         result = func(*args, **kwargs)
-        logger.debug('%sExiting: %s: %s%s', CO2, func.__name__, __format(result), CLR)
+        logger.debug('%sExiting: %s: %s%s', COLOR_2, func.__name__,
+                     __format(result), RESET_C)
         return result
     return decorator
