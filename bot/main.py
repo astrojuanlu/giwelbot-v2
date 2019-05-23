@@ -767,7 +767,7 @@ def error_handler(bot, update, error):
     logger.critical(text)
 
     # FOR DEBUGGING
-    bot.send_message(chat_id=-1001332763908, text=html.escape(text))
+    bot.send_message(chat_id=-1001332763908, text=text)
 
 
 def get_handler(data):
