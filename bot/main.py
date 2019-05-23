@@ -763,17 +763,18 @@ def debug_handler(ctx):
 
 
 @flogger
-@context
-@assert_keys('cid uid')
-def view_captcha_handler(ctx):
-    change_seed(ctx.chat.id / 10000 + ctx.user.id / 10)
+def view_captcha_handler(bot, update):
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    change_seed(chat_id / 10000 + user_id / 10)
 
-    text = html.escape(get_captcha(num_answers=6)[0])
-    ctx.message.reply_text(text=text, parse_mode='HTML')
+    text1 = html.escape(get_captcha(num_answers=6)[0])
 
     import captcha2
-    text = html.escape(captcha2.get_captcha(num_answers=6)[0])
-    ctx.message.reply_text(text=text, parse_mode='HTML')
+    text2 = html.escape(captcha2.get_captcha(num_answers=6)[0])
+
+    text = f'{text1}\n\n{text2}'
+    bot.send_message(chat_id=chat_id, text=text, parse_mode='HTML')
 
 
 # ----------------------------------- #
