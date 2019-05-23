@@ -762,6 +762,20 @@ def debug_handler(ctx):
     logger.debug('CTX.MEM.DATA: %s', __format(ctx.mem.get_data()))
 
 
+@flogger
+@context
+@assert_keys('cid uid')
+def view_captcha_handler(ctx):
+    change_seed(ctx.chat.id / 10000 + ctx.user.id / 10)
+
+    text = html.escape(get_captcha(num_answers=6)[0])
+    ctx.message.reply_text(text=text, parse_mode='HTML')
+
+    import captcha2
+    text = html.escape(captcha2.get_captcha(num_answers=6)[0])
+    ctx.message.reply_text(text=text, parse_mode='HTML')
+
+
 # ----------------------------------- #
 
 
@@ -786,7 +800,8 @@ def main(polling, clean):
     updater = Updater(TOKEN)
     dis = updater.dispatcher
 
-    dis.add_handler(CommandHandler('debug', debug_handler, ~Filters.private))
+    dis.add_handler(CommandHandler('view_captcha', view_captcha_handler, Filters.all))
+    dis.add_handler(CommandHandler('debug', debug_handler, Filters.all))
 
     # Group handlers
     dis.add_handler(CommandHandler('start', help_handler, ~Filters.private))
