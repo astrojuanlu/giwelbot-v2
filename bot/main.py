@@ -34,16 +34,16 @@ HOST = 'https://test-welcome-tg-bot.herokuapp.com'
 BIND = '0.0.0.0'
 
 
-GREETING_TIMER = 2 * 60  # seconds
+GREETING_TIMER = 3 * 60  # seconds
 GREETING_TIMER_TEXT = time_to_text(GREETING_TIMER)
 
 CAPTCHA_TIMER = 2 * 60  # seconds
 CAPTCHA_TIMER_TEXT = time_to_text(CAPTCHA_TIMER)
 
-ATTEMPT_INTERVAL = datetime.timedelta(minutes=3)  # for attempts to join
+ATTEMPT_INTERVAL = datetime.timedelta(minutes=2)  # for attempts to join
 ATTEMPT_INTERVAL_TEXT = time_to_text(ATTEMPT_INTERVAL)
 
-TEMPORARY_RESTRICTION = datetime.timedelta(minutes=3)  # for share media
+TEMPORARY_RESTRICTION = datetime.timedelta(minutes=2)  # for share media
 TEMPORARY_RESTRICTION_TEXT = time_to_text(TEMPORARY_RESTRICTION)
 
 
@@ -125,8 +125,10 @@ HELP = ('<b>Bot de bienvenida</b>\n\n'
         'Para poder realizar estas funciones el bot debe ser administrador.')
 
 
-logging.basicConfig(level=logging.DEBUG,
-                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+DATEFMT = '%Y%m%d %H%M%S'
+LOGFMT = ('%(asctime)s.%(msecs)03d %(levelname)-8s %(threadName)-10s '
+          '%(lineno)-4d %(name)-9s %(message)s')
+logging.basicConfig(level=logging.DEBUG, format=LOGFMT, datefmt=DATEFMT)
 logger = logging.getLogger(__name__)
 context = Contextualizer()
 
@@ -332,7 +334,7 @@ def captcha_thread(ctx):
     if ctx.mem[:, 'captchas', 'private', 'status'] is CaptchaStatus.WAITING:
         message = ctx.mem[:, 'captchas', 'private', 'message']
         if message:
-            result = message.edit_text(text=TIMEOUT_CAPTCHA_TEXT)
+            result = bool(message.edit_text(text=TIMEOUT_CAPTCHA_TEXT))
             logger.debug(LOG_MSG_U, ctx.uid, 'modified private captcha', result)
 
     # Need to expulsion?
@@ -381,8 +383,9 @@ def greeting_thread(ctx):
             del ctx.mem[:, user_id, 'restrict']
 
         # 'restrict' is eliminated in group_talk_handler (and in the expulsions)
-        del ctx.mem[:, user_id, 'join']
-        del ctx.mem[:, user_id, 'greet']
+        user_data = ctx.mem[:, user_id:{}]
+        user_data.pop('join', None)
+        user_data.pop('greet', None)
         user_id_list.append(user_id)
 
     # `ctx.mem.delete_if_empty` can modify the list of users (`ctx.mem.user_ids`)
@@ -420,11 +423,12 @@ def help_handler(bot, update):
 def new_user_handler(ctx):
     ban = False
     new = False
-    ctx.mem.set_keys(ctx.cid)  # user change
     for new_user in ctx.message.new_chat_members:
 
         if new_user.id == ctx.bot.id:
             continue  # ignore myself
+
+        ctx.mem.mod_key(1, new_user.id)
 
         if pass_ban_rules(ctx.chat, new_user):
 
@@ -441,7 +445,7 @@ def new_user_handler(ctx):
                                           CAPTCHA_TIMER,
                                           context=(ctx.chat, new_user))
             # Save info
-            ctx.mem[:, new_user.id] = {
+            ctx.mem[:] = {
                 'join': ctx.message,
                 'greet': True,
                 'restrict': None,
@@ -480,7 +484,7 @@ def left_user_handler(ctx):
         # Cleaning to avoid spam in name
         delete_message(ctx.message, 'delete service message (left user)')
 
-    ctx.mem.set_keys(ctx.cid, ctx.message.left_chat_member.id)
+    ctx.mem.mod_key(1, ctx.message.left_chat_member.id)
     # User can be before the bot...
     # ...or bot might not have been operational when he left
     if ctx.mem.contains_keys():
@@ -497,7 +501,7 @@ def left_user_handler(ctx):
         # Modify private captcha
         message = ctx.mem[:, 'captchas', 'private', 'message']
         if message:
-            result = message.edit_text(text=LEAVE_GROUP_CAPTCHA_TEXT)
+            result = bool(message.edit_text(text=LEAVE_GROUP_CAPTCHA_TEXT))
             logger.debug(LOG_MSG_U, ctx.uid, 'modified private captcha', result)
 
         # Delete all info

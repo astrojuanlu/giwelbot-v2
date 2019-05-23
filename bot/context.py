@@ -127,6 +127,8 @@ class Contextualizer:
         Set a value in the data.
         '''
         data, key = self.__get_last_data_key(keys, 'setdefault')
+        if isinstance(key, slice):
+            key = key.start
         data[key] = value
 
 
@@ -136,6 +138,8 @@ class Contextualizer:
         Delete a value from the data.
         '''
         data, key = self.__get_last_data_key(keys, 'get')
+        if isinstance(key, slice):
+            key = key.start
         try:
             del data[key]
         except KeyError:
@@ -152,8 +156,8 @@ class Contextualizer:
         if not isinstance(keys, (list, tuple)):
             keys = (keys,)
 
-        if isinstance(keys[0], slice):
-            keys = self.__keys[keys[0]] + list(keys[1:])
+        if isinstance(keys[0], slice) and (len(keys) > 1 or keys[0].start is None):
+            keys = self.__keys + list(keys[1:])
 
         data = self.__data
         for key in keys[:-1]:
