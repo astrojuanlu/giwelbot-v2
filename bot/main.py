@@ -51,6 +51,7 @@ TLD = (r'(?i:com|net|io|me|org|red|info|tools|mobi|xyz|biz|pro|blog|zip|link|to|
        r'review|country|cricket|science|work|party|g[dql]|jobs|c[co]|i[en]|ly|name)')
 URL_MAIL = r'(?P<I>(?i:[ωw]+\.|[/@]))?WORD\.(?(I)WORD|TLD)'
 URL_MAIL = URL_MAIL.replace('WORD', r'[^\s.]+').replace('TLD', TLD)
+URL_MAIL_SEARCH = re.compile(URL_MAIL).search
 INVISIBLE = '\u2061\u2062\u2063\u2064'
 SPACE = ('\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u200b\u202f'
          '\u205f\u3000\ufeff')
@@ -59,7 +60,7 @@ FAKE_NAME = (r'(?i:cuenta\s*eliminada|deleted\s*account|marketing|website|promo\
              r'agent|telegram|tgmember|^[\sNOVIS]*$)').replace('NOVIS', NOVIS)
 BAN_RULES = (
     (lambda name: len(name) > 39, 'long name'),
-    (re.compile(URL_MAIL).search, 'name with uri'),
+    (URL_MAIL_SEARCH, 'name with uri'),
     (re.compile(FAKE_NAME).search, 'fake name'),
 )
 LOG_MSG_UC = 'user=%d in chat=%d %s: %s'
@@ -85,7 +86,9 @@ NEW_CAPTCHA_TOKEN = get_token()
 CHANCE_CAPTCHA_TEXT = 'Chat privado'
 CAPTCHA_TEXT = ('Por favor {} resuelve el siguiente captcha '
                 '(una simple operación matemática):\n\n{}\n\nResultado:')
-SOLVED_CAPTCHA_TEXT1 = '✅ Captcha correcto {}.'
+SOLVED_CAPTCHA_TEXT1 = ('✅ Captcha correcto {}. '
+                        'Ahora podrás enviar solo texto sin URLs durante '
+                        f'{TEMPORARY_RESTRICTION_TEXT}.')
 SOLVED_CAPTCHA_TEXT2 = '✅ Captcha correcto.'
 SOLVED_CAPTCHA_ALERT = 'Respuesta correcta'
 CAN_NOT_USE = ('No podrá usar el grupo, contacte con un administrador '
@@ -538,7 +541,7 @@ def group_talk_handler(ctx):
     restrict = ctx.mem[:, 'restrict']
     if restrict:
         if restrict > datetime.datetime.now():
-            if not ctx.message.text:
+            if not ctx.message.text or URL_MAIL_SEARCH(ctx.message.text):
                 # Only text allowed at beginning
                 delete_message(ctx.message, 'temporarily limited user')
         else:
