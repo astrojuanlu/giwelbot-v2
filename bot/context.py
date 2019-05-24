@@ -1,5 +1,6 @@
 # -*- coding: UTF-8 -*-
 
+import time
 import logging
 import functools
 import threading
@@ -266,7 +267,10 @@ class Contextualizer:
                 if ctx.user:
                     keys.append(ctx.user.id)
 
+            start = time.time()
             with self.__lock:
+                self.logger.debug('%s wait %.3f seconds', func.__name__,
+                                  time.time() - start)
                 self.set_keys(*keys)
                 result = func(ctx)
 

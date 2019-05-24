@@ -34,17 +34,17 @@ HOST = 'https://test-welcome-tg-bot.herokuapp.com'
 BIND = '0.0.0.0'
 
 
-GREETING_TIMER = 3 * 60  # seconds
-GREETING_TIMER_TEXT = time_to_text(GREETING_TIMER)
-
-CAPTCHA_TIMER = 2 * 60  # seconds
+CAPTCHA_TIMER = 5 * 60  # seconds
 CAPTCHA_TIMER_TEXT = time_to_text(CAPTCHA_TIMER)
 
-ATTEMPT_INTERVAL = datetime.timedelta(minutes=2)  # for attempts to join
-ATTEMPT_INTERVAL_TEXT = time_to_text(ATTEMPT_INTERVAL)
+GREETING_TIMER = 10 * 60  # seconds
+GREETING_TIMER_TEXT = time_to_text(GREETING_TIMER)
 
-TEMPORARY_RESTRICTION = datetime.timedelta(minutes=2)  # for share media
+TEMPORARY_RESTRICTION = datetime.timedelta(minutes=15)  # for share media
 TEMPORARY_RESTRICTION_TEXT = time_to_text(TEMPORARY_RESTRICTION)
+
+ATTEMPT_INTERVAL = datetime.timedelta(hours=1)  # for attempts to join
+ATTEMPT_INTERVAL_TEXT = time_to_text(ATTEMPT_INTERVAL)
 
 
 TLD = (r'(?i:com|net|io|me|org|red|info|tools|mobi|xyz|biz|pro|blog|zip|link|to|kim|'
@@ -762,21 +762,6 @@ def debug_handler(ctx):
     logger.debug('CTX.MEM.DATA: %s', __format(ctx.mem.get_data()))
 
 
-@flogger
-def view_captcha_handler(bot, update):
-    chat_id = update.effective_chat.id
-    user_id = update.effective_user.id
-    change_seed(chat_id / 10000 + user_id / 10)
-
-    text1 = html.escape(get_captcha(num_answers=6)[0])
-
-    import captcha2
-    text2 = html.escape(captcha2.get_captcha(num_answers=6)[0])
-
-    text = f'{text1}\n\n{text2}'
-    bot.send_message(chat_id=chat_id, text=text, parse_mode='HTML')
-
-
 # ----------------------------------- #
 
 
@@ -801,7 +786,6 @@ def main(polling, clean):
     updater = Updater(TOKEN)
     dis = updater.dispatcher
 
-    dis.add_handler(CommandHandler('view_captcha', view_captcha_handler, Filters.all))
     dis.add_handler(CommandHandler('debug', debug_handler, Filters.all))
 
     # Group handlers
