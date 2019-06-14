@@ -8,13 +8,7 @@ TASK SKETCH:
       (for no bot)
     - apply full restrictions
     - send captcha                          → thread (job)
-    - create info:
-      - join = OBJ_message
-      - greet = True
-      - restrict = None
-      - captchas = {'wait': OBJ,
-                    'group': {···},
-                    'private': {}}
+    - save info: Admission, GCaptcha
     - throw greeting                        → thread (job)
 
   left_user_handler:
@@ -23,18 +17,17 @@ TASK SKETCH:
     - stop captchas timer
     - delete group captcha
     - modify private captcha
-    - delete all info
-      - and delete_if_empty
+    - delete info: Admission, Restriction
 
   group_talk_handler:
 
-    - exclude yourself
-    - cancel greeting grouping
-    - if anyone greeted                     → cancel pending greetings
+    - check for spam
+      - apply strikes rules
     - new user on hold?                     → delete message
     - new recent user?                      → delete multimedia message
-      - If the restriction time ends        → delete of info: restrict
-        - and delete_if_empty
+      - If the restriction time ends        → delete info: Restriction
+    - if anyone greeted                     → cancel pending greetings
+    - cancel greeting grouping
 
   captcha_handler:
 
@@ -43,7 +36,7 @@ TASK SKETCH:
     - token correct?
       - in group:                           → change text/status in group
       - in private:                         → change text/status in private/group
-      - set restrict timedelta
+      - save info: Restriction
       - apply temp restrictions
     - incorrect token?
       - in group:                           → change text/status in group
@@ -56,19 +49,16 @@ TASK SKETCH:
     - if status is WAITING (private)        → modify private captcha
     - not correct state                     → expulsion user
                                             - delete join message
-                                            - delete of info: join, greet, restrict
-    - delete of info captchas
-      - and delete_if_empty
+                                            - delete info: Admission, Restriction
 
   greeting_thread:                          (waiting time is over: greet the users)
 
-    - per user without captchas
+    - per user with captcha not waiting
       - reobtain user data
       - apply banning rules                 → expulsion user
                                             - delete join message
-                                            - delete of info: restrict
-      - delete from info: join, greet
-        - and delete_if_empty
+                                            - delete info: Restriction
+      - delete info: Admission
       - make a list of names (if greet=True and with previous)
       - send greeting
       - delete previous greeting
@@ -76,43 +66,24 @@ TASK SKETCH:
 
 
 
-DATA STRUCTURE:
+DATA STRUCTURE IN RAM:
 
-  data = {
-      chat_id: {
-          user_id: {                            to control user join
-              'join': OBJ_message,              joined service message
-              'greet': BOOL,
-              'restrict': DATETIME,             temporary restriction
-              'captchas': {
-                  'wait': OBJ_job,              to cancel ahead of time
-                  'group': {
-                      'message': OBJ_message,
-                      'status': ENUM_status,
-                      'token': STR_token,
-                  },
-                  'private': {
-                      'message': OBJ_message,
-                      'status': ENUM_status,
-                      'token': STR_token,
-                  },
-              },
+  mem = {
+      user_id: {
+          'menus': {
+              'num• title': chat_id,            deleted in every request
           },
-          'previous': {                         to group greetings
-              'names': [STR_name],
-              'message': OBJ_message,
+          'waits': {
+              chat_id: OBJ_job,                 to cancel ahead of time
           },
-      },
-      'privates': {                             for use in private menu
-          user_id: {
-              'num• title': chat_id             deleted in every request
-          }
       }
   }
 
   ENUM MenuStep:        STOP, INIT, CHAT
   ENUM UserRestriction: NONE, TEMP, FULL
   ENUM CaptchaStatus:   WAITING, SOLVED, WRONG
+  ENUM CaptchaLocation: GROUP, PRIVATE
+  ENUM DBDelete         NONE, USER, ADMISSION, RESTRICTION, EXPULSION
 
 
 

@@ -1,0 +1,4 @@
+#!/bin/bash
+cd "$(dirname "$(readlink -fn "$0")")"
+coverage run --source=bot bot/main.py -pcvv |& tee .coverage.logs
+coverage html -d .coverage.html
