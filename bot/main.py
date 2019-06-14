@@ -252,16 +252,16 @@ def ban_user(bot, chat_id, user_id, reason, until):
 
 
 @flogger
-def apply_banning_rules(ctx, user_id, user_full_name):
-    until = datetime.datetime.now() + BANNED_RESTRICTION
+def pass_ban_rules(ctx, user_id, user_full_name):
     for rule, reason in BAN_RULES:
         if rule(remove_diacritics(user_full_name or '')):
+            until = datetime.datetime.now() + BANNED_RESTRICTION
             ban_user(ctx.bot, ctx.cid, user_id, reason, until)
             delete_from_db(ctx, DBDelete.ADM_RES, user_id=user_id)
             ctx.dbs.add(Expulsion(chat_id=ctx.cid, user_id=user_id,
                                   reason=reason, until=until))
-            return reason
-    return None
+            return False
+    return True
 
 
 @flogger
@@ -392,7 +392,7 @@ def greeting_thread(ctx):
         if chatmember.status not in (chatmember.LEFT, chatmember.KICKED):
             # Status can by: CREATOR, ADMINISTRATOR, MEMBER, RESTRICTED
             user = chatmember.user
-            if not apply_banning_rules(ctx, uid, user.full_name):
+            if pass_ban_rules(ctx, uid, user.full_name):
                 # User must have some name...
                 name = get_user_name(user)
                 # ...and no one has greeted
@@ -463,13 +463,7 @@ def new_user_handler(ctx):
         # not allow entry, and if it allows it is because some administrator
         # enabled it
 
-        reason = apply_banning_rules(ctx, uid, new_user.full_name)
-        if reason:
-            ban = True
-            until = datetime.datetime.now() + BANNED_RESTRICTION
-            ctx.dbs.add(Expulsion(chat_id=ctx.cid, user_id=uid,
-                                  reason=reason, until=until))
-        else:
+        if pass_ban_rules(ctx, uid, new_user.full_name):
             if new_user.is_bot:
                 continue  # ignore other bots (in multiple inclusions)
 
@@ -503,7 +497,8 @@ def new_user_handler(ctx):
             ctx.dbs.add(admission)
             ctx.dbs.add(captcha)
             new = True
-
+        else:
+            ban = True
 
     if ban:
         # If several users entered together, can not be separated in the
