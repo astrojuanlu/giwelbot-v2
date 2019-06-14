@@ -69,8 +69,10 @@ def get_captcha(num_answers):
     # Add fake answers
     correct_answer = str(int(answer))  # for 1.0 → '1'
     if num_answers > 4:
-        num_c = f'{num_a}{num_b}'
-        answers = list(set([correct_answer, str(num_a), str(num_b), num_c]))
+        answers = [correct_answer, str(num_a), str(num_b)]
+        if num_a != 0:
+            answers.append(f'{num_a}{num_b}')
+        answers = list(set(answers))
     else:
         answers = [correct_answer]
     while len(answers) < num_answers:
