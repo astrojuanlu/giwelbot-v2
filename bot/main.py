@@ -365,7 +365,7 @@ def captcha_thread(ctx):
 
     # Need to expulsion?
     status = ctx.admission.group_captcha.status
-    if status is not CaptchaStatus.SOLVED:
+    if status and status is not CaptchaStatus.SOLVED:
         until = datetime.datetime.now() + BANNED_RESTRICTION
         reason = f'captcha not resolved in time ({status})'
         ban_user(ctx.bot, ctx.cid, ctx.uid, reason, until)
@@ -550,7 +550,6 @@ def left_user_handler(ctx):
 @flogger
 @context
 def group_talk_handler(ctx):
-    # pylint: disable=too-many-branches
 
     # Spam is not allowed
     if is_spam(ctx.tgm):
@@ -565,14 +564,11 @@ def group_talk_handler(ctx):
             ctx.user.strikes = 0
             ctx.dbs.add(Expulsion(chat_id=ctx.cid, user_id=ctx.uid,
                                   reason=reason, until=until))
-        else:
-            warn = int(3 * STRIKES_LIMIT / 4)
-            left = STRIKES_LIMIT - warn
-            if ctx.user.strikes > warn:
-                mention = html.escape(get_user_mention(ctx.tgu))
-                ctx.send(text=(f'{mention} ya tienes {ctx.user.strikes} '
-                               f'strikes, {left} mas y serás baneado '
-                               f'por {BANNED_RESTRICTION_TEXT}.'))
+            return
+
+        mention = html.escape(get_user_mention(ctx.tgu))
+        ctx.send(text=(f'{mention} borré su mensaje porque contiene spam '
+                       f'[strike {ctx.user.strikes} de {STRIKES_LIMIT}].'))
         return
 
     # If can not limit the user (available only for supergroups)
