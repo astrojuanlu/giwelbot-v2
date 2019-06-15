@@ -87,7 +87,7 @@ CHANCE_CAPTCHA_TEXT = 'Chat privado'
 CAPTCHA_TEXT = ('Por favor {} resuelve el siguiente captcha '
                 '(una simple operación matemática):\n\n{}\n\nResultado:')
 SOLVED_CAPTCHA_TEXT1 = ('✅ Captcha correcto {}. '
-                        'Ahora podrás enviar solo texto sin URLs durante '
+                        'Ahora podrá enviar solo texto sin URLs durante '
                         f'{TEMPORARY_RESTRICTION_TEXT}.')
 SOLVED_CAPTCHA_TEXT2 = '✅ Captcha correcto.'
 SOLVED_CAPTCHA_ALERT = 'Respuesta correcta'
