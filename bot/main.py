@@ -535,10 +535,10 @@ def left_user_handler(ctx):
         delete_message(ctx.bot, ctx.cid, message_id, 'delete captcha message')
 
         # Modify private captcha
-        message_id = admission.private_captcha.message_id
-        if message_id:
+        captcha = admission.private_captcha
+        if captcha and captcha.status is not CaptchaStatus.SOLVED:
             result = bool(ctx.edit(chat_id=ctx.uid,  # private_chat_id is user_id
-                                   message_id=message_id,
+                                   message_id=captcha.message_id,
                                    text=LEAVE_GROUP_CAPTCHA_TEXT))
             logger.debug(LOG_MSG_U, ctx.uid, 'modified private captcha', result)
 

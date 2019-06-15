@@ -8,7 +8,6 @@ import functools
 from telegram import Update, TelegramError
 from telegram.ext import Job
 
-from sqlalchemy.orm import joinedload
 from sqlalchemy.sql import and_, or_, exists
 
 from debug import flogger
@@ -27,8 +26,8 @@ def get_query(query, chat_id=None, user_id=None):
         query = query.filter_by(user_id=user_id)
 
     if chat_id and user_id:
-        return query.with_for_update().first()
-    return query.with_for_update().all()
+        return query.first()
+    return query.all()
 
 
 def no_null(value):
@@ -162,7 +161,7 @@ class Context:
     #@flogger
     def _get_db_obj(self, model, attributes):
         query = self.dbs.query(model).filter_by(id=attributes['id'])
-        obj = query.with_for_update().first()
+        obj = query.first()
         if obj:
             for var, val in attributes.items():
                 if var != 'id':
@@ -183,7 +182,7 @@ class Context:
 
     @flogger
     def get_admissions(self, *, chat_id=None, user_id=None):
-        query = self.dbs.query(Admission).options(joinedload('captchas'))
+        query = self.dbs.query(Admission)
         return get_query(query, chat_id, user_id)
 
     @flogger
@@ -193,9 +192,9 @@ class Context:
 
     @flogger
     def get_expulsions(self, *, chat_id=None, user_id=None):
-        query = self.dbs.query(Expulsion)
         # Expulsions are stored for a period of time
-        query = query.order_by(Expulsion.until.desc()).group_by(Expulsion.chat_id)
+        query = self.dbs.query(Expulsion).order_by(Expulsion.until.desc())
+        query = query.group_by(Expulsion.id, Expulsion.chat_id)
         return get_query(query, chat_id, user_id)
 
 
@@ -225,15 +224,15 @@ class Contextualizer:
                 self.logger.debug('go to %s', func.__name__)
                 result = func(ctx)
             except:
+                self.logger.exception('db rollback')
                 dbs.rollback()
-                self.logger.debug('db rollback')
                 raise
             else:
-                dbs.commit()
                 self.logger.debug('db commit')
+                dbs.commit()
             finally:
-                dbs.close()
                 self.logger.debug('db close')
+                dbs.close()
             return result
         return decorator
 
