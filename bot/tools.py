@@ -1,4 +1,5 @@
 # -*- coding: UTF-8 -*-
+# Copyright (C) 2019 Schmidt Cristian Hernán
 
 import os
 import time
@@ -14,9 +15,76 @@ import threading
 import unicodedata
 
 
+DATE_FMT = '%y%m%d.%H%M%S'
 CHARACTERS = string.digits + string.ascii_letters
 SECRET_PHRASE = ''.join(secrets.choice(CHARACTERS) for _ in range(9)).encode()
 BASE64_ALTCHARS = ''.join(secrets.choice(CHARACTERS) for _ in range(2)).encode()
+
+
+class Sentinel:
+
+    def __repr__(self):
+        return f'«{self.__class__.__name__}»'
+
+    def __bool__(self):
+        return False
+
+    def __hash__(self):
+        return hash(object())
+
+    def __call__(self, *arg, **kwargs):
+        return Sentinel()
+
+    def __getattr__(self, name):
+        return Sentinel()
+
+    #def __setattr__(self, name, value):
+    #    return None
+
+    #def __delattr__(self, name):
+    #    return None
+
+    #def __getitem__(self, key):
+    #    return Sentinel()
+
+    #def __setitem__(self, key, value):
+    #    return None
+
+    #def __delitem__(self, key):
+    #    return None
+
+
+def _name(name):
+    return (name or '').strip()
+
+def _name_gt(name, max_len):
+    name = _name(name)
+    return name if len(name) > max_len else ''
+
+def get_user_name(user):
+    name = (_name_gt(user.first_name, 2) or
+            _name_gt(user.last_name, 2) or
+            (f'@{user.username}' if user.username else '')).strip()
+    if len(name) > 2:
+        return name
+    name = f'{_name(user.first_name)} {_name(user.last_name)}'
+    return name.strip()
+
+
+def get_user_mention(user):
+    if user.full_name and user.username:
+        mention = f'{user.full_name} (@{user.username})'
+
+    elif user.full_name:
+        mention = f'{user.full_name}'
+
+    elif user.username:
+        mention = f'@{user.username}'
+
+    else:
+        mention = f'{user.id}'
+
+    return mention
 
 
 def run_async(func):

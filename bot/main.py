@@ -1,4 +1,5 @@
 # -*- coding: UTF-8 -*-
+# Copyright (C) 2019 Schmidt Cristian Hernán
 '''Telegram bot for welcome.'''
 
 import sys
@@ -20,31 +21,44 @@ from telegram import (InlineKeyboardButton, InlineKeyboardMarkup,
 from telegram.ext import (Updater, Filters, ConversationHandler,
                           CallbackQueryHandler, RegexHandler,
                           CommandHandler, MessageHandler)
-from telegram.error import BadRequest
+from telegram.error import TelegramError
 
+from spam import is_spam
 from debug import flogger
-from tools import (run_async, get_token, change_seed, remove_diacritics,
-                   time_to_text, chunked)
+from tools import (get_user_name, get_user_mention, run_async, get_token,
+                   change_seed, remove_diacritics, time_to_text, chunked,
+                   SECRET_PHRASE, DATE_FMT)
 from context import Contextualizer
 from captcha import get_captcha
+from database import (CaptchaStatus, CaptchaLocation, BASE, User, Chat,
+                      Admission, Captcha, Restriction, Expulsion)
 
+
+DATETIME_IN_LOG = int(os.environ.get('DATETIME_IN_LOG', 1))
+DEBUG_CHAT_ID = int(os.environ['DEBUG_CHAT_ID'])
+ENV_DATABASE = os.environ['ENV_DATABASE']  # for heroku 'DATABASE_URL'
 TOKEN = os.environ['TELEGRAM_TOKEN']
-PORT = int(os.environ['PORT'])
-HOST = 'https://test-welcome-tg-bot.herokuapp.com'
-BIND = '0.0.0.0'
+PORT = int(os.environ.get('PORT', 443))
+HOST = os.environ['HOST']
+BIND = os.environ['BIND']
 
 
-CAPTCHA_TIMER = 5 * 60  # seconds
+CAPTCHA_TIMER = datetime.timedelta(minutes=5)
 CAPTCHA_TIMER_TEXT = time_to_text(CAPTCHA_TIMER)
 
-GREETING_TIMER = 10 * 60  # seconds
+GREETING_TIMER = datetime.timedelta(minutes=10)
 GREETING_TIMER_TEXT = time_to_text(GREETING_TIMER)
 
 TEMPORARY_RESTRICTION = datetime.timedelta(minutes=15)  # for share media
 TEMPORARY_RESTRICTION_TEXT = time_to_text(TEMPORARY_RESTRICTION)
 
-ATTEMPT_INTERVAL = datetime.timedelta(hours=1)  # for attempts to join
-ATTEMPT_INTERVAL_TEXT = time_to_text(ATTEMPT_INTERVAL)
+BANNED_RESTRICTION = datetime.timedelta(hours=2)  # for attempts to join
+BANNED_RESTRICTION_TEXT = time_to_text(BANNED_RESTRICTION)
+
+DELTA_DELETE_ADMISSIONS = datetime.timedelta(days=1)
+# 90 * DELTA_DELETE_ADMISSIONS to delete Expulsion
+
+SPAM_STRIKES_LIMIT = 3
 
 
 TLD = (r'(?i:com|net|io|me|org|red|info|tools|mobi|xyz|biz|pro|blog|zip|link|to|kim|'
@@ -53,11 +67,11 @@ URL_MAIL = r'(?P<I>(?i:[ωw]+\.|[/@]))?WORD\.(?(I)WORD|TLD)'
 URL_MAIL = URL_MAIL.replace('WORD', r'[^\s.]+').replace('TLD', TLD)
 URL_MAIL_SEARCH = re.compile(URL_MAIL).search
 INVISIBLE = '\u2061\u2062\u2063\u2064'
-SPACE = ('\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u200b\u202f'
-         '\u205f\u3000\ufeff')
+SPACE = ('\u0020\u00a0\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a'
+         '\u202f\u205f\u3000\u200b\ufeff')
 NOVIS = INVISIBLE + SPACE
 FAKE_NAME = (r'(?i:cuenta\s*eliminada|deleted\s*account|marketing|website|promo\s*'
-             r'agent|telegram|tgmember|^[\sNOVIS]*$)').replace('NOVIS', NOVIS)
+             r'agent|telegram|tg(vip)?member|^[\sNOVIS]*$)').replace('NOVIS', NOVIS)
 BAN_RULES = (
     (lambda name: len(name) > 39, 'long name'),
     (URL_MAIL_SEARCH, 'name with uri'),
@@ -93,7 +107,7 @@ SOLVED_CAPTCHA_TEXT2 = '✅ Captcha correcto.'
 SOLVED_CAPTCHA_ALERT = 'Respuesta correcta'
 CAN_NOT_USE = ('No podrá usar el grupo, contacte con un administrador '
                'si considera que es un error. Puede volver a intentar '
-               f'en {ATTEMPT_INTERVAL_TEXT}.')
+               f'en {BANNED_RESTRICTION_TEXT}.')
 WRONG_CAPTCHA_TEXT1 = ('⛔️ Captcha incorrecto {}. Por privado con '
                        '<code>/start</code> puedes resolver otro captcha.')
 WRONG_CAPTCHA_TEXT2 = f'⛔️ Captcha incorrecto. {CAN_NOT_USE}'
@@ -128,12 +142,11 @@ HELP = ('<b>Bot de bienvenida</b>\n\n'
         'Para poder realizar estas funciones el bot debe ser administrador.')
 
 
-DATEFMT = '%Y%m%d %H%M%S'
-LOGFMT = ('%(asctime)s.%(msecs)03d %(levelname)-8s %(threadName)-10s '
-          '%(lineno)-4d %(name)-9s %(message)s')
-logging.basicConfig(level=logging.DEBUG, format=LOGFMT, datefmt=DATEFMT)
+DTL = '%(asctime)s.%(msecs)03d ' if DATETIME_IN_LOG else ''
+LOGFMT = f'{DTL}%(levelname)-8s %(threadName)-10s %(name)-9s %(lineno)-4d %(message)s'
+logging.basicConfig(level=logging.DEBUG, format=LOGFMT, datefmt=DATE_FMT)
 logger = logging.getLogger(__name__)
-context = Contextualizer()
+context = Contextualizer(ENV_DATABASE, DELTA_DELETE_ADMISSIONS)
 
 
 class UserRestriction(enum.Enum):
@@ -148,10 +161,12 @@ class MenuStep(enum.IntEnum):
     CHAT = 1
 
 
-class CaptchaStatus(enum.Enum):
-    WAITING = 0
-    SOLVED = 1
-    WRONG = 2
+class DBDelete(enum.IntFlag):
+    USER = 1
+    ADMISSION = 2
+    RESTRICTION = 4
+    EXPULSION = 8
+    ADM_RES = ADMISSION | RESTRICTION
 
 
 KEYBOARD_COMMON = {
@@ -164,64 +179,25 @@ KEYBOARD_COMMON = {
 # Auxiliary functions
 
 
-def assert_keys(key_names):
-    def wrapper(func):
-        @functools.wraps(func)
-        def wrapped(ctx):
-            current_keys = ctx.mem.get_keys()
-            expected_keys = [getattr(ctx, key) for key in key_names.split()]
-            assert current_keys == expected_keys, (f'{func.__module__} '
-                                                   f'{current_keys} != '
-                                                   f'{expected_keys}')
-            return func(ctx)
-        return wrapped
-    return wrapper
-
-
-def get_mention_html(user):
-    full_name = user.full_name
-    username = user.username
-
-    if full_name and username:
-        mention = '{} (@{})'.format(full_name, username)
-    elif full_name:
-        mention = '{}'.format(full_name)
-    elif username:
-        mention = '@{}'.format(username)
-    else:
-        mention = '{}'.format(user.id)
-
-    return html.escape(mention)
-
-
 def get_button(text, data=None, url=None):
     return InlineKeyboardButton(text=text, callback_data=data, url=url)
 
 
 @flogger
 @run_async
-def send_help(bot, chat_id):
-    bot.send_message(chat_id=chat_id, text=HELP, parse_mode='HTML')
-
-
-@flogger
-@run_async
-def restrict_user(bot, chat_id, user_id, restriction):
+def restrict_user(bot, chat_id, user_id, restriction, until=0):
 
     if restriction is UserRestriction.FULL:
         can_send_messages = False
         can_others = False
-        until_date = 0  # forever
 
     elif restriction is UserRestriction.NONE:
         can_send_messages = True
         can_others = True
-        until_date = 0  # forever
 
     elif restriction is UserRestriction.TEMP:
         can_send_messages = True
         can_others = False
-        until_date = datetime.datetime.now() + TEMPORARY_RESTRICTION
 
     else:
         raise NotImplementedError(str(restriction))
@@ -229,7 +205,7 @@ def restrict_user(bot, chat_id, user_id, restriction):
     parameters = {
         'chat_id': chat_id,
         'user_id': user_id,
-        'until_date': until_date,
+        'until_date': until,
         'can_send_messages': can_send_messages,
         'can_send_media_messages': can_others,
         'can_send_other_messages': can_others,
@@ -237,51 +213,59 @@ def restrict_user(bot, chat_id, user_id, restriction):
     }
     try:
         result = bot.restrict_chat_member(**parameters)
-    except BadRequest as exc:
-        result = str(exc)
+    except TelegramError as tge:
+        result = str(tge)
     logger.info(LOG_MSG_UC, user_id, chat_id, restriction, result)
 
 
 @flogger
 @run_async
-def ban_user(chat, user, reason):
+def ban_user(bot, chat_id, user_id, reason, until):
+    chat = bot.get_chat(chat_id=chat_id)
 
     all_adm = chat.all_members_are_administrators
-    bot_adm = any(m.user.id == chat.bot.id for m in chat.get_administrators())
+    bot_adm = any(adm.user.id == bot.id for adm in chat.get_administrators())
 
+    action = 'can not ban'
     if bot_adm and not all_adm:
-        until_date = datetime.datetime.now() + ATTEMPT_INTERVAL
-        kicked = chat.kick_member(user.id, until_date=until_date)
-        if kicked:
-            action = 'ban by'
+        try:
+            kicked = chat.kick_member(user_id=user_id, until_date=until)
+        except TelegramError as tge:
+            reason = str(tge)
         else:
-            action = 'can not ban'
-            reason = 'unknown'
-            # Not kicked but try to limit it
-            restrict_user(chat.bot, chat.id, user.id, UserRestriction.FULL)
+            if kicked:
+                action = 'ban by'
+            else:
+                reason = 'unknown'
+                # Not kicked but try to limit it
+                restrict_user(bot, chat_id, user_id, UserRestriction.FULL)
     else:
-        action = 'can not ban'
         reason = 'insufficient permissions or not allowed'
 
-    logger.info(LOG_MSG_UC, user.id, chat.id, action, reason)
+    logger.info(LOG_MSG_UC, user_id, chat_id, action, reason)
 
     # FOR DEBUGGING
+    user = bot.get_chat_member(chat_id=chat_id, user_id=user_id).user
     text = f'{action}: {reason}\nchat: {chat.title}\nuser: {user.full_name}'
-    chat.bot.send_message(chat_id=-1001332763908, text=html.escape(text))
+    bot.send_message(chat_id=DEBUG_CHAT_ID, text=text)
 
 
 @flogger
-def pass_ban_rules(chat, user):
+def pass_ban_rules(ctx, user_id, user_full_name):
     for rule, reason in BAN_RULES:
-        if rule(remove_diacritics(user.full_name or '')):
-            ban_user(chat, user, reason)
+        if rule(remove_diacritics(user_full_name or '')):
+            until = datetime.datetime.now() + BANNED_RESTRICTION
+            ban_user(ctx.bot, ctx.cid, user_id, reason, until)
+            delete_from_db(ctx, DBDelete.ADM_RES, user_id=user_id)
+            ctx.dbs.add(Expulsion(chat_id=ctx.cid, user_id=user_id,
+                                  reason=reason, until=until))
             return False
     return True
 
 
 @flogger
-def send_captcha(chat, user, message=None):
-    change_seed(chat.id / 10000 + user.id / 10)
+def send_captcha(ctx, mention, message_id=None):
+    change_seed(ctx.cid / 10000 + ctx.uid / 100)
 
     captcha, correct_answer, answers = get_captcha(num_answers=6)
     rows = []
@@ -296,27 +280,64 @@ def send_captcha(chat, user, message=None):
 
     rows.append([get_button(NEW_CAPTCHA_TEXT, NEW_CAPTCHA_TOKEN)])
 
-    keyboard = InlineKeyboardMarkup(rows)
-    text = CAPTCHA_TEXT.format(get_mention_html(user), html.escape(captcha))
-    parameters = {'text': text, 'reply_markup': keyboard, 'parse_mode': 'HTML'}
-    if message:
-        message.edit_text(**parameters)
+    parameters = {'text': CAPTCHA_TEXT.format(mention, html.escape(captcha)),
+                  'reply_markup': InlineKeyboardMarkup(rows)}
+    if message_id:
+        message = ctx.edit(message_id=message_id, **parameters)
     else:
-        message = chat.send_message(**parameters)
-    logger.debug(LOG_MSG_UC, user.id, chat.id, 'send captcha', bool(message))
-    return correct_token, message
+        message = ctx.send(**parameters)
+    return correct_token, message.message_id
 
 
 @flogger
 @run_async
-def delete_message(message, text):
-    try:
-        result = message.delete()
-        logger.debug('%s, mid=%d deleted: %s', text, message.message_id, result)
-    except BadRequest as exc:
-        logger.warning('%s, mid=%d: %s', text, message.message_id, exc)
-    except AttributeError:
-        pass  # can by message == None
+def delete_message(bot, chat_id, message_id, text):
+    if chat_id and message_id:
+        try:
+            result = bot.delete_message(chat_id=chat_id, message_id=message_id)
+            logger.debug('%s, mid=%d deleted: %s', text, message_id, result)
+        except TelegramError as tge:
+            logger.warning('%s, mid=%d: %s', text, message_id, tge)
+
+
+@flogger
+def get_from_db(ctx, attr, chat_id, user_id):
+    if chat_id or user_id:
+        return getattr(ctx, f'get_{attr}s')(chat_id=chat_id or ctx.cid,
+                                            user_id=user_id or ctx.uid)
+    return getattr(ctx, attr)
+
+
+@flogger
+def delete_from_db(ctx, delete, *, chat_id=None, user_id=None):
+    if isinstance(delete, DBDelete):
+        items = []
+    elif isinstance(delete, BASE):
+        items = [delete]
+        delete = None
+    else:
+        raise NotImplementedError(f'delete type {type(delete)}')
+
+    if delete:
+        #if DBDelete.USER in delete:
+        #    items.append(ctx.user)
+
+        if DBDelete.ADMISSION in delete:
+            admission = get_from_db(ctx, 'admission', chat_id, user_id)
+            items.append(admission)
+            if admission:
+                items.extend(admission.captchas.values())
+
+        if DBDelete.RESTRICTION in delete:
+            items.append(get_from_db(ctx, 'restriction', chat_id, user_id))
+
+        #if DBDelete.EXPULSION in delete:
+        #    items.append(get_from_db(ctx, 'expulsion', chat_id, user_id))
+
+    for item in items:
+        if item:
+            ctx.dbs.delete(item)
+            logger.debug('Deleted from db %s', item)
 
 
 # ----------------------------------- #
@@ -325,89 +346,93 @@ def delete_message(message, text):
 
 @flogger
 @context
-@assert_keys('cid uid')
 def captcha_thread(ctx):
     # Waiting time is over to solve captcha
+    ctx.mem.get(ctx.uid, {}).get('wait', {}).pop(ctx.cid, None)
 
     # Delete group captcha
-    message = ctx.mem[:, 'captchas', 'group', 'message']
-    delete_message(message, 'delete captcha message')
+    message_id = ctx.admission.group_captcha.message_id
+    delete_message(ctx.bot, ctx.cid, message_id, 'delete captcha message')
 
     # Modify private captcha
-    if ctx.mem[:, 'captchas', 'private', 'status'] is CaptchaStatus.WAITING:
-        message = ctx.mem[:, 'captchas', 'private', 'message']
-        if message:
-            result = bool(message.edit_text(text=TIMEOUT_CAPTCHA_TEXT))
-            logger.debug(LOG_MSG_U, ctx.uid, 'modified private captcha', result)
+    if ctx.admission.private_captcha.status is CaptchaStatus.WAITING:
+        message_id = ctx.admission.private_captcha.message_id
+        result = bool(ctx.edit(chat_id=ctx.uid,  # private_chat_id is user_id
+                               message_id=message_id,
+                               text=TIMEOUT_CAPTCHA_TEXT))
+        logger.debug(LOG_MSG_U, ctx.uid, 'modified private captcha', result)
 
     # Need to expulsion?
-    if ctx.mem[:, 'captchas', 'group', 'status'] is not CaptchaStatus.SOLVED:
-        ban_user(ctx.chat, ctx.user, 'captcha not resolved in time')
-        delete_message(ctx.mem[:, 'join'], 'delete service message (new user)')
-        del ctx.mem[:, 'join']
-        del ctx.mem[:, 'greet']
-        del ctx.mem[:, 'restrict']
-
-    # Delete all captchas
-    del ctx.mem[:, 'captchas']
-    ctx.mem.delete_if_empty()
+    status = ctx.admission.group_captcha.status
+    if status and status is not CaptchaStatus.SOLVED:
+        until = datetime.datetime.now() + BANNED_RESTRICTION
+        reason = f'captcha not resolved in time ({status})'
+        ban_user(ctx.bot, ctx.cid, ctx.uid, reason, until)
+        delete_from_db(ctx, DBDelete.ADM_RES)
+        ctx.dbs.add(Expulsion(chat_id=ctx.cid, user_id=ctx.uid,
+                              reason=reason, until=until))
+        delete_message(ctx.bot, ctx.cid, ctx.admission.join_message_id,
+                       'delete service message (new user)')
 
 
 @flogger
 @context
-@assert_keys('cid')
 def greeting_thread(ctx):
     # Waiting time is over: greet the users
 
-    user_id_list = []
-    names_list = []
-    for user_id in ctx.mem.user_ids():
+    names = []
+    for admission in ctx.get_admissions(chat_id=ctx.cid):
 
-        if ctx.mem[:, user_id, 'captchas']:
+        if admission.group_captcha.status is not CaptchaStatus.SOLVED:
             continue  # captcha still to be resolved
 
-        chatmember = ctx.chat.get_member(user_id)  # can change in time
+        uid = admission.user_id
+        chatmember = ctx.tgc.get_member(uid)  # can change
         if chatmember.status not in (chatmember.LEFT, chatmember.KICKED):
-            # status can by: CREATOR, ADMINISTRATOR, MEMBER, RESTRICTED
+            # Status can by: CREATOR, ADMINISTRATOR, MEMBER, RESTRICTED
             user = chatmember.user
-            if pass_ban_rules(ctx.chat, user):
-                # users must have first_name, last_name or username to be greeted
-                name = user.first_name or user.last_name or user.username or None
+            if pass_ban_rules(ctx, uid, user.full_name):
+                # User must have some name...
+                name = get_user_name(user)
                 # ...and no one has greeted
-                if name and ctx.mem[:, user_id, 'greet']:
-                    names_list.append(name)
-                    logger.debug(LOG_MSG_UC, user_id, ctx.cid, 'greet', True)
+                if name and admission.to_greet:
+                    names.append(name)
+                    logger.debug(LOG_MSG_UC, uid, ctx.cid, 'greet', True)
             else:
-                message = ctx.mem[:, user_id, 'join']
-                delete_message(message, 'delete service message (new user)')
-                del ctx.mem[:, user_id, 'restrict']
+                delete_message(ctx.bot, ctx.cid, ctx.admission.join_message_id,
+                               'delete service message (new user)')
+                delete_from_db(ctx, DBDelete.RESTRICTION, user_id=uid)
         else:
-            # user is no longer present
-            del ctx.mem[:, user_id, 'restrict']
+            # `join_message_id` not deleted
+            # User is no longer present
+            delete_from_db(ctx, DBDelete.RESTRICTION, user_id=uid)
 
-        # 'restrict' is eliminated in group_talk_handler (and in the expulsions)
-        user_data = ctx.mem[:, user_id:{}]
-        user_data.pop('join', None)
-        user_data.pop('greet', None)
-        user_id_list.append(user_id)
+        # `Restriction` is eliminated in group_talk_handler and in expulsions
+        delete_from_db(ctx, admission)
 
-    # `ctx.mem.delete_if_empty` can modify the list of users (`ctx.mem.user_ids`)
-    for user_id in user_id_list:
-        ctx.mem.delete_if_empty(ctx.cid, user_id)
-
-    if names_list:
-        names_list = ctx.mem[:, 'previous', 'names':[]] + names_list
-        if len(names_list) > 1:
-            names = ', '.join(names_list[:-1]) + AND + names_list[-1]
-            text = GREETING_PLURAL.format(html.escape(names))
+    if names:
+        sep = ', '
+        prev = ctx.chat.prev_greet_users or ''
+        num = len(names)
+        if prev or num > 1:
+            if num == 1:
+                text = prev + AND + names[0]
+            else:
+                text = prev + sep + sep.join(names[:-1]) + AND + names[-1]
+            text = GREETING_PLURAL.format(html.escape(text))
         else:
-            text = GREETING_SINGULAR.format(html.escape(names_list[0]))
+            text = GREETING_SINGULAR.format(html.escape(names[0]))
 
-        message = ctx.chat.send_message(text=text)
+        # New welcome
+        message = ctx.send(text=text)
 
-        delete_message(ctx.mem[:, 'previous', 'message'], 'delete previous greeting')
+        # Previous welcome
+        delete_message(ctx.bot, ctx.cid, ctx.chat.prev_greet_message_id,
+                       'delete previous greeting')
 
-        ctx.mem[:, 'previous'] = {'names': names_list, 'message': message}
+        # Save data
+        ctx.chat.prev_greet_users = prev + sep.join(names)
+        ctx.chat.prev_greet_message_id = message.message_id
         logger.debug(LOG_MSG_C, ctx.cid, 'send greeting', bool(message))
 
 
@@ -416,52 +441,60 @@ def greeting_thread(ctx):
 
 
 @flogger
+@run_async
 def help_handler(bot, update):
-    send_help(bot, update.effective_chat.id)
+    chat_id = update.effective_chat.id
+    bot.send_message(chat_id=chat_id, text=HELP, parse_mode='HTML')
 
 
 @flogger
 @context
-@assert_keys('cid uid')
 def new_user_handler(ctx):
-    ban = False
     new = False
-    for new_user in ctx.message.new_chat_members:
+    ban = False
+    for new_user in ctx.tgm.new_chat_members:
+        uid = new_user.id
 
-        if new_user.id == ctx.bot.id:
+        if uid == ctx.bot.id:
             continue  # ignore myself
 
-        ctx.mem.mod_key(1, new_user.id)
+        # It is not necessary to check the expulsions, because Telegram will
+        # not allow entry, and if it allows it is because some administrator
+        # enabled it
 
-        if pass_ban_rules(ctx.chat, new_user):
-
+        if pass_ban_rules(ctx, uid, new_user.full_name):
             if new_user.is_bot:
-                continue  # ignore other bots
+                continue  # ignore other bots (in multiple inclusions)
+
+            user = ctx.get_user(id=uid)
 
             # Preventively limited to the user
-            restrict_user(ctx.bot, ctx.cid, new_user.id, UserRestriction.FULL)
+            restrict_user(ctx.bot, ctx.cid, user.id, UserRestriction.FULL)
 
-            # Sending the message with the captcha to the group
-            captcha_token, captcha_message = send_captcha(ctx.chat, new_user)
+            # Sending the captcha to the group
+            token, mid = send_captcha(ctx, html.escape(get_user_mention(new_user)))
+            logger.debug(LOG_MSG_UC, ctx.cid, user.id, 'send captcha', bool(mid))
+
             # Start timer
             wait = ctx.job_queue.run_once(captcha_thread,
-                                          CAPTCHA_TIMER,
-                                          context=(ctx.chat, new_user))
+                                          CAPTCHA_TIMER.total_seconds(),
+                                          context=(ctx.tgc, new_user))
             # Save info
-            ctx.mem[:] = {
-                'join': ctx.message,
-                'greet': True,
-                'restrict': None,
-                'captchas': {
-                    'wait': wait,
-                    'group': {
-                        'message': captcha_message,
-                        'status': CaptchaStatus.WAITING,
-                        'token': captcha_token,
-                    },
-                    'private': {},
-                },
-            }
+            # ... in memory
+            ctx.mem.setdefault(user.id, {}).setdefault('wait', {})[ctx.cid] = wait
+            # ... in database
+            delete_from_db(ctx, DBDelete.ADMISSION, user_id=user.id)
+            admission = Admission(join_message_id=ctx.mid,
+                                  join_message_date=ctx.date,
+                                  user=user,
+                                  chat=ctx.chat)
+            captcha = Captcha(message_id=mid,
+                              status=CaptchaStatus.WAITING,
+                              token=token,
+                              location=CaptchaLocation.GROUP,
+                              admission=admission)
+            ctx.dbs.add(admission)
+            ctx.dbs.add(captcha)
             new = True
         else:
             ban = True
@@ -469,85 +502,105 @@ def new_user_handler(ctx):
     if ban:
         # If several users entered together, can not be separated in the
         # service message, decided to erase all because it may contain spam
-        delete_message(ctx.message, 'delete service message (new user)')
+        delete_message(ctx.bot, ctx.cid, ctx.mid,
+                       'delete service message (new user)')
 
     if new:
         # Throw greeting thread
-        wait = ctx.job_queue.run_once(greeting_thread,
-                                      GREETING_TIMER,
-                                      context=(ctx.chat,))
+        ctx.job_queue.run_once(greeting_thread,
+                               GREETING_TIMER.total_seconds(),
+                               context=(ctx.tgc,))
 
 
 @flogger
 @context
-@assert_keys('cid uid')
 def left_user_handler(ctx):
     # User banned by the bot?
     if ctx.from_bot:
-        # Cleaning to avoid spam in name
-        delete_message(ctx.message, 'delete service message (left user)')
+        # Cleaning to avoid spam (by name) in service message
+        delete_message(ctx.bot, ctx.cid, ctx.mid,
+                       'delete service message (left user)')
 
-    ctx.mem.mod_key(1, ctx.message.left_chat_member.id)
-    # User can be before the bot...
-    # ...or bot might not have been operational when he left
-    if ctx.mem.contains_keys():
+    user = ctx.get_user(id=ctx.tgm.left_chat_member.id)
 
-        # Stop captchas timer
-        wait = ctx.mem[:, 'captchas', 'wait']
-        if wait:
-            wait.schedule_removal()
+    # Stop captchas timer
+    wait = ctx.mem.get(user.id, {}).get('wait', {}).pop(ctx.cid, None)
+    if wait:
+        wait.schedule_removal()
 
+    admission = ctx.get_admissions(chat_id=ctx.cid, user_id=user.id)
+    if admission:
         # Delete group captcha
-        message = ctx.mem[:, 'captchas', 'group', 'message']
-        delete_message(message, 'delete captcha message')
+        message_id = admission.group_captcha.message_id
+        delete_message(ctx.bot, ctx.cid, message_id, 'delete captcha message')
 
         # Modify private captcha
-        message = ctx.mem[:, 'captchas', 'private', 'message']
-        if message:
-            result = bool(message.edit_text(text=LEAVE_GROUP_CAPTCHA_TEXT))
+        captcha = admission.private_captcha
+        if captcha and captcha.status is not CaptchaStatus.SOLVED:
+            result = bool(ctx.edit(chat_id=ctx.uid,  # private_chat_id is user_id
+                                   message_id=captcha.message_id,
+                                   text=LEAVE_GROUP_CAPTCHA_TEXT))
             logger.debug(LOG_MSG_U, ctx.uid, 'modified private captcha', result)
 
-        # Delete all info
-        del ctx.mem[:]
-        ctx.mem.delete_if_empty()
+    # Delete all info
+    delete_from_db(ctx, DBDelete.ADM_RES, user_id=user.id)
 
 
 @flogger
 @context
-@assert_keys('cid uid')
 def group_talk_handler(ctx):
-    if ctx.from_bot:
+
+    # Spam is not allowed
+    if is_spam(ctx.tgm):
+        delete_message(ctx.bot, ctx.cid, ctx.mid, 'deleted by spam')
+        ctx.user.strikes += 1
+
+        if ctx.user.strikes > SPAM_STRIKES_LIMIT:
+            until = datetime.datetime.now() + BANNED_RESTRICTION
+            reason = 'spammer'
+            ban_user(ctx.bot, ctx.cid, ctx.uid, reason, until)
+            delete_from_db(ctx, DBDelete.ADM_RES)
+            ctx.user.strikes = 0
+            ctx.dbs.add(Expulsion(chat_id=ctx.cid, user_id=ctx.uid,
+                                  reason=reason, until=until))
+            return
+
+        mention = html.escape(get_user_mention(ctx.tgu))
+        ctx.send(text=(f'{mention} borré su mensaje porque contiene spam '
+                       f'[strike {ctx.user.strikes} de {SPAM_STRIKES_LIMIT}].'))
         return
-
-    # Cancel greeting grouping
-    if ctx.mem[ctx.cid, 'previous']:
-        del ctx.mem[ctx.cid, 'previous']
-        logger.debug(LOG_MSG_C, ctx.cid, 'group next greeting', False)
-
-    # Greeting given by a member of the group
-    if GREET_FROM_MEMBER(ctx.message.text or ''):
-        for user_id, info in ctx.mem[ctx.cid:{}].items():
-            if isinstance(user_id, int):
-                info['greet'] = False
-        logger.debug(LOG_MSG_C, ctx.cid, 'next greeting', False)
 
     # If can not limit the user (available only for supergroups)
     # must delete their messages until the captcha is resolve
-    status = ctx.mem[:, 'captchas', 'group', 'status']
-    if status is not None and status is not CaptchaStatus.SOLVED:
-        delete_message(ctx.message, 'user needs to resolve captcha')
+    status = ctx.admission.group_captcha.status
+    if status and status is not CaptchaStatus.SOLVED:
+        delete_message(ctx.bot, ctx.cid, ctx.mid,
+                       'user needs to resolve captcha')
+        return
 
     # Or until run out of time limitation
-    restrict = ctx.mem[:, 'restrict']
-    if restrict:
-        if restrict > datetime.datetime.now():
-            if not ctx.message.text or URL_MAIL_SEARCH(ctx.message.text):
+    if ctx.restriction:
+        if datetime.datetime.now() < ctx.restriction.until:
+            if not ctx.text or URL_MAIL_SEARCH(ctx.text):
                 # Only text allowed at beginning
-                delete_message(ctx.message, 'temporarily limited user')
+                delete_message(ctx.bot, ctx.cid, ctx.mid,
+                               'temporarily limited user')
+                return
         else:
-            del ctx.mem[:, 'restrict']
-            ctx.mem.delete_if_empty()
+            delete_from_db(ctx, DBDelete.RESTRICTION)
             logger.info(LOG_MSG_UC, ctx.uid, ctx.cid, 'unrestricted', True)
+
+    # Cancel greeting grouping
+    if ctx.chat.prev_greet_users:
+        ctx.chat.prev_greet_users = None
+        ctx.chat.prev_greet_message_id = None
+        logger.debug(LOG_MSG_C, ctx.cid, 'group next greeting', False)
+
+    # Greeting given by a member of the group
+    if GREET_FROM_MEMBER(ctx.text):
+        for admission in ctx.get_admissions(chat_id=ctx.cid):
+            admission.to_greet = False
+        logger.debug(LOG_MSG_C, ctx.cid, 'next greeting', False)
 
 
 def captcha_handler_answer(func):
@@ -562,75 +615,80 @@ def captcha_handler_answer(func):
 
 @flogger
 @context
-@assert_keys('cid uid')
 @captcha_handler_answer
 def captcha_handler(ctx):
-    ctx.mem.add_keys('captchas')
-
-    # Verify identity
+    # Searching for origin
     if ctx.is_group:
-        ctx.mem.add_keys('group')
-        if ctx.mem[:, 'message'] != ctx.message:
-            return None  # this captcha is from another user
-        chat_id = ctx.cid
+        cap = ctx.admission.group_captcha
+        if cap.message_id != ctx.mid or cap.status is not CaptchaStatus.WAITING:
+            return None  # this captcha is from another user or already resolved
+        captcha = cap
+        chat_id = ctx.admission.chat_id
 
     elif ctx.is_private:
-        # Search which group the captcha corresponds to.
-        ctx.mem.add_keys('private')
-        for chat_id in ctx.mem.chat_ids():
-            ctx.mem.mod_key(0, chat_id)
-            if ctx.mem[:, 'message'] == ctx.message:
+        # Search which group the captcha corresponds to
+        for admission in ctx.get_admissions(user_id=ctx.uid):
+            cap = admission.private_captcha
+            if cap.message_id == ctx.mid and cap.status is CaptchaStatus.WAITING:
+                captcha = cap
+                chat_id = admission.chat_id
                 break
         else:
-            return None  # time may have run out
+            return None  # the time to be finished
 
     else:
         return None  # not implemented for channels
 
-    # `ctx.chat` can be group or private
-    # `chat_id` is from the group always
-
     token = ctx.update.callback_query.data or ''
+    mention = html.escape(get_user_mention(ctx.tgu))
 
     # New captcha
     if hmac.compare_digest(token, NEW_CAPTCHA_TOKEN):
-        new_token, _ = send_captcha(ctx.chat, ctx.user, ctx.message)
-        ctx.mem[:, 'token'] = new_token
-        return None  # nothing else to do
+        logger.debug(LOG_MSG_U, ctx.uid, 'token', 'new')
+
+        token, mid = send_captcha(ctx, mention, captcha.message_id)
+        logger.debug(LOG_MSG_UC, ctx.cid, ctx.uid, 'send captcha', bool(mid))
+        captcha.token = token
+        return None  # nothing else for now
 
     # Correct answer
-    if hmac.compare_digest(token, ctx.mem[:, 'token']):
-        ctx.mem[:, 'status'] = CaptchaStatus.SOLVED
-        text = SOLVED_CAPTCHA_TEXT1.format(get_mention_html(ctx.user))
+    if captcha.is_correct(token):
+        logger.debug(LOG_MSG_U, ctx.uid, 'token', 'correct')
+
+        captcha.status = CaptchaStatus.SOLVED
+        text = SOLVED_CAPTCHA_TEXT1.format(mention)
 
         if ctx.is_private:
             # Modify the captcha of the group as well
-            ctx.mem.mod_key(3, 'group')
-            ctx.mem[:, 'status'] = CaptchaStatus.SOLVED
-            ctx.mem[:, 'message'].edit_text(text=text)
+            g_captcha = captcha.admission.group_captcha
+            g_captcha.status = CaptchaStatus.SOLVED
+            ctx.edit(chat_id=chat_id, message_id=g_captcha.message_id, text=text)
             text = SOLVED_CAPTCHA_TEXT2
 
-        ctx.message.edit_text(text=text)
+        ctx.edit(text=text)
+
         # Accepted but temporarily limited
-        until_date = datetime.datetime.now() + TEMPORARY_RESTRICTION
-        ctx.mem[chat_id, ctx.uid, 'restrict'] = until_date
-        restrict_user(ctx.bot, chat_id, ctx.uid, UserRestriction.TEMP)
+        until = datetime.datetime.now() + TEMPORARY_RESTRICTION
+        delete_from_db(ctx, DBDelete.RESTRICTION, chat_id=chat_id)
+        ctx.dbs.add(Restriction(chat_id=chat_id, user_id=ctx.uid, until=until))
+        restrict_user(ctx.bot, chat_id, ctx.uid, UserRestriction.TEMP, until)
         return SOLVED_CAPTCHA_ALERT
 
     # Wrong answer
-    ctx.mem[:, 'status'] = CaptchaStatus.WRONG
+    logger.debug(LOG_MSG_U, ctx.uid, 'token', 'wrong')
+    captcha.status = CaptchaStatus.WRONG
     if ctx.is_group:
         # Link to second opportunity
+        url = f't.me/{ctx.bot.username}?start={ctx.tgu.id}'
         parameters = {
-            'text': WRONG_CAPTCHA_TEXT1.format(get_mention_html(ctx.user)),
-            'parse_mode': 'HTML',
+            'text': WRONG_CAPTCHA_TEXT1.format(mention),
             'reply_markup': InlineKeyboardMarkup([[
-                get_button(CHANCE_CAPTCHA_TEXT, url=f't.me/{ctx.bot.username}')
+                get_button(CHANCE_CAPTCHA_TEXT, url=url)
             ]]),
         }
     else:
         parameters = {'text': WRONG_CAPTCHA_TEXT2}
-    ctx.message.edit_text(**parameters)
+    ctx.edit(**parameters)
     return WRONG_CAPTCHA_ALERT
 
 
@@ -640,88 +698,90 @@ def captcha_handler(ctx):
 
 @flogger
 @context
-@assert_keys('cid uid')
 def menu_handler(ctx):
-    ctx.mem.add_keys('captchas')
+    now = datetime.datetime.now()
+
     wrongs = {}
-    waits = []
-    for chat_id in ctx.mem.chat_ids():
-        ctx.mem.mod_key(0, chat_id)
-        message = ctx.mem[:, 'group', 'message']
-        if message:
-            title = html.escape(message.chat.title)
-
-            wrong_group = ctx.mem[:, 'group', 'status'] is CaptchaStatus.WRONG
-            private = ctx.mem[:, 'private', 'status']
-
-            if wrong_group and private is None:
-                wrongs[f'{len(wrongs)+1}• {title}'] = chat_id
-
-            elif private is CaptchaStatus.WRONG:
-                wait = message.date + ATTEMPT_INTERVAL - datetime.datetime.now()
-                waits.append('• {}{}"{}"'.format(time_to_text(wait), FOR, title))
-
+    for admission in ctx.get_admissions(user_id=ctx.uid):
+        still_valid = now - admission.join_message_date < CAPTCHA_TIMER
+        wrong_group = admission.group_captcha.status is CaptchaStatus.WRONG
+        not_private = not admission.private_captcha.status
+        if still_valid and wrong_group and not_private:
+            title = html.escape(admission.chat.title)
+            wrongs[f'{len(wrongs)+1}• {title}'] = admission.chat_id
     if wrongs:
-        ctx.mem['privates', ctx.uid] = wrongs
+        ctx.mem.setdefault(ctx.uid, {})['menu'] = wrongs
         keyboard = ReplyKeyboardMarkup([[YES, NO]], **KEYBOARD_COMMON)
-        message = ctx.message.reply_text(text=START_MENU_TEXT1,
-                                         reply_markup=keyboard)
+        message = ctx.send(text=START_MENU_TEXT1, reply_markup=keyboard)
         logger.debug(LOG_MSG_P, ctx.uid, 'start menu', bool(message))
         return MenuStep.INIT
 
+    waits = set()
+    for expulsion in ctx.get_expulsions(user_id=ctx.uid):
+        wait = expulsion.until - now
+        if wait.total_seconds() > 0:
+            waits.add('• {}{}"{}"'.format(time_to_text(wait),
+                                          FOR,
+                                          html.escape(expulsion.chat.title)))
     if waits:
-        text = START_MENU_TEXT2.format('\n'.join(waits))
+        text = START_MENU_TEXT2.format('\n'.join(sorted(waits)))
         keyboard = ReplyKeyboardRemove()
-        message = ctx.message.reply_text(text=text, reply_markup=keyboard)
+        message = ctx.send(text=text, reply_markup=keyboard)
         logger.debug(LOG_MSG_P, ctx.uid, 'must wait', bool(message))
         return MenuStep.STOP
 
-    send_help(ctx.bot, ctx.cid)
+    ctx.send(text=('No tienes pendiente ningún captcha, '
+                   'con /help tienes información adicional.'))
     return MenuStep.STOP
 
 
 @flogger
 @context
-@assert_keys('cid uid')
 def init_handler(ctx):
-    wrongs = ctx.mem['privates', ctx.uid]
-    if len(wrongs) > 1:
-        keyboard = ReplyKeyboardMarkup([[key] for key in wrongs],
-                                       **KEYBOARD_COMMON)
-        message = ctx.message.reply_text(text=INIT_MENU_TEXT1,
-                                         reply_markup=keyboard)
-        logger.debug(LOG_MSG_P, ctx.uid, 'select chat', bool(message))
-        return MenuStep.CHAT
+    wrongs = ctx.mem.get(ctx.uid, {}).get('menu')
+    if wrongs:
+        if len(wrongs) > 1:
+            keyboard = ReplyKeyboardMarkup([[key] for key in wrongs],
+                                           **KEYBOARD_COMMON)
+            message = ctx.send(text=INIT_MENU_TEXT1, reply_markup=keyboard)
+            logger.debug(LOG_MSG_P, ctx.uid, 'select chat', bool(message))
+            return MenuStep.CHAT
 
-    key = list(wrongs)[0]
-    ctx.message.reply_text(text=INIT_MENU_TEXT2.format(key),
-                           reply_markup=ReplyKeyboardRemove())
-    return chat_process(ctx, key)
+        key = list(wrongs)[0]
+        ctx.send(text=INIT_MENU_TEXT2.format(key),
+                 reply_markup=ReplyKeyboardRemove())
+        return chat_process(ctx, key)
+
+    ctx.send(text='Ocurrió algún error, vuelva a iniciar el proceso con /start',
+             reply_markup=ReplyKeyboardRemove())
+    return stop_process(ctx)
 
 
 @flogger
 @context
-@assert_keys('cid uid')
 def chat_handler(ctx):
-    key = ctx.message.text or ''
-    ctx.message.reply_text(text=CHAT_MENU_TEXT.format(html.escape(key)),
-                           reply_markup=ReplyKeyboardRemove())
+    key = ctx.text
+    ctx.send(text=CHAT_MENU_TEXT.format(html.escape(key)),  # can be modified
+             reply_markup=ReplyKeyboardRemove())
     return chat_process(ctx, key)
 
 
 @flogger
 def chat_process(ctx, key):
-    chat_id = ctx.mem['privates', ctx.uid, key]
+    chat_id = ctx.mem.get(ctx.uid, {}).get('menu').get(key)
     if chat_id:
-        del ctx.mem['privates', ctx.uid]
+        ctx.mem.get(ctx.uid, {}).pop('menu', None)
 
-        token, message = send_captcha(ctx.chat, ctx.user)
-        ctx.mem[chat_id, ctx.uid, 'captchas', 'private'] = {
-            'message': message,
-            'status': CaptchaStatus.WAITING,
-            'token': token,
-        }
-        logger.debug(LOG_MSG_P, ctx.uid, 'send captcha', bool(message))
+        mention = html.escape(get_user_mention(ctx.tgu))
+        token, mid = send_captcha(ctx, mention)
+        admission = ctx.get_admissions(chat_id=chat_id, user_id=ctx.uid)
+        ctx.dbs.add(Captcha(message_id=mid,
+                            status=CaptchaStatus.WAITING,
+                            token=token,
+                            location=CaptchaLocation.PRIVATE,
+                            admission=admission))
+
+        logger.debug(LOG_MSG_P, ctx.uid, 'send captcha', bool(mid))
         return MenuStep.STOP
 
     return incorrect_process(ctx)
@@ -729,20 +789,20 @@ def chat_process(ctx, key):
 
 @flogger
 @context
-@assert_keys('cid uid')
 def stop_handler(ctx):
-    if ctx.mem.contains_keys('privates', ctx.uid):
-        del ctx.mem['privates', ctx.uid]
+    return stop_process(ctx)
 
-    message = ctx.message.reply_text(text=CANCEL_MENU_TEXT,
-                                     reply_markup=ReplyKeyboardRemove())
+
+@flogger
+def stop_process(ctx):
+    ctx.mem.get(ctx.uid, {}).pop('menu', None)
+    message = ctx.send(text=CANCEL_MENU_TEXT, reply_markup=ReplyKeyboardRemove())
     logger.debug(LOG_MSG_P, ctx.uid, 'cancel menu', bool(message))
     return MenuStep.STOP
 
 
 @flogger
 @context
-@assert_keys('cid uid')
 def incorrect_handler(ctx):
     incorrect_process(ctx)
 
@@ -750,16 +810,35 @@ def incorrect_handler(ctx):
 @flogger
 @run_async
 def incorrect_process(ctx):
-    message = ctx.message.reply_text(text=INCORRECT_MENU_TEXT)
+    message = ctx.send(text=INCORRECT_MENU_TEXT)
     logger.debug(LOG_MSG_P, ctx.uid, 'incorrect option', bool(message))
 
 
 @flogger
 @context
-@assert_keys('cid uid')
+def dc_db_handler(ctx):
+    if ctx.is_private and ctx.text.split(None, 1)[-1] == SECRET_PHRASE.decode():
+        ctx.dbs.close()
+        context.dbe.get_session(drop_all_tables=True, create_all_tables=True)
+        logger.info('DB: drop all tables')
+    else:
+        logger.info('SECRET PHRASE: %s', SECRET_PHRASE.decode())
+
+
+@flogger
+@context
 def debug_handler(ctx):
-    from debug import __format
-    logger.debug('CTX.MEM.DATA: %s', __format(ctx.mem.get_data()))
+    from pprint import pformat
+
+    texts = []
+    for model in (User, Chat, Admission, Restriction, Expulsion):
+        rows = '\n'.join(f'• {str(row)}' for row in ctx.dbs.query(model).all())
+        if rows:
+            texts.append(rows)
+
+    logger.debug('DEBUGGING:\n\nMEM:\n%s\n\nDB:\n%s\n',
+                 pformat(ctx.mem),
+                 '\n\n'.join(texts))
 
 
 # ----------------------------------- #
@@ -770,7 +849,7 @@ def error_handler(bot, update, error):
     logger.critical(text)
 
     # FOR DEBUGGING
-    bot.send_message(chat_id=-1001332763908, text=text)
+    bot.send_message(chat_id=DEBUG_CHAT_ID, text=text)
 
 
 def get_handler(data):
@@ -786,7 +865,8 @@ def main(polling, clean):
     updater = Updater(TOKEN)
     dis = updater.dispatcher
 
-    dis.add_handler(CommandHandler('debug', debug_handler, Filters.all))
+    dis.add_handler(CommandHandler('dc_db', dc_db_handler, Filters.private))
+    dis.add_handler(CommandHandler('debug', debug_handler, Filters.private))
 
     # Group handlers
     dis.add_handler(CommandHandler('start', help_handler, ~Filters.private))
@@ -819,13 +899,13 @@ def main(polling, clean):
     # Mode
     if polling:
         updater.start_polling(clean=clean)
-        logger.debug('start in polling mode, clean=%s', clean)
+        logger.info('start in polling mode, clean=%s', clean)
     else:
         # start_webhook: only set webhook if SSL is handled by library
         updater.bot.set_webhook('{}/{}'.format(HOST, TOKEN))
         # cleaning updates is not supported if SSL-termination happens elsewhere
         updater.start_webhook(listen=BIND, port=PORT, url_path=TOKEN)
-        logger.debug('start in webhook mode')
+        logger.info('start in webhook mode')
     # Wait...
     updater.idle()
 
