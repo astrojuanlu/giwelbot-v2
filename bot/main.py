@@ -34,32 +34,31 @@ from database import (CaptchaStatus, CaptchaLocation, BASE, User, Chat,
                       Admission, Captcha, Restriction, Expulsion)
 
 
-DATETIME_IN_LOG = os.environ.get('DATETIME_IN_LOG', True)
-DEBUG_CHAT_ID = 287700412 # -1001332763908
-ENV_DATABASE = 'DATABASE_URL'
-
+DATETIME_IN_LOG = int(os.environ.get('DATETIME_IN_LOG', 1))
+DEBUG_CHAT_ID = int(os.environ['DEBUG_CHAT_ID'])
+ENV_DATABASE = os.environ['ENV_DATABASE']  # for heroku 'DATABASE_URL'
 TOKEN = os.environ['TELEGRAM_TOKEN']
 PORT = int(os.environ.get('PORT', 443))
-HOST = '' # 'https://test-welcome-tg-bot.herokuapp.com'
-BIND = '' # '0.0.0.0'
+HOST = os.environ['HOST']
+BIND = os.environ['BIND']
 
 
-CAPTCHA_TIMER = datetime.timedelta(minutes=1)  # (5)
+CAPTCHA_TIMER = datetime.timedelta(minutes=5)
 CAPTCHA_TIMER_TEXT = time_to_text(CAPTCHA_TIMER)
 
-GREETING_TIMER = datetime.timedelta(minutes=2)  # (10)
+GREETING_TIMER = datetime.timedelta(minutes=10)
 GREETING_TIMER_TEXT = time_to_text(GREETING_TIMER)
 
-TEMPORARY_RESTRICTION = datetime.timedelta(minutes=1)  # for share media (15)
+TEMPORARY_RESTRICTION = datetime.timedelta(minutes=15)  # for share media
 TEMPORARY_RESTRICTION_TEXT = time_to_text(TEMPORARY_RESTRICTION)
 
-BANNED_RESTRICTION = datetime.timedelta(hours=0.02)  # for attempts to join (2)
+BANNED_RESTRICTION = datetime.timedelta(hours=2)  # for attempts to join
 BANNED_RESTRICTION_TEXT = time_to_text(BANNED_RESTRICTION)
 
 DELTA_DELETE_ADMISSIONS = datetime.timedelta(days=1)
 # 90 * DELTA_DELETE_ADMISSIONS to delete Expulsion
 
-STRIKES_LIMIT = 2  # attempts (6)
+SPAM_STRIKES_LIMIT = 3
 
 
 TLD = (r'(?i:com|net|io|me|org|red|info|tools|mobi|xyz|biz|pro|blog|zip|link|to|kim|'
@@ -556,7 +555,7 @@ def group_talk_handler(ctx):
         delete_message(ctx.bot, ctx.cid, ctx.mid, 'deleted by spam')
         ctx.user.strikes += 1
 
-        if ctx.user.strikes > STRIKES_LIMIT:
+        if ctx.user.strikes > SPAM_STRIKES_LIMIT:
             until = datetime.datetime.now() + BANNED_RESTRICTION
             reason = 'spammer'
             ban_user(ctx.bot, ctx.cid, ctx.uid, reason, until)
@@ -568,7 +567,7 @@ def group_talk_handler(ctx):
 
         mention = html.escape(get_user_mention(ctx.tgu))
         ctx.send(text=(f'{mention} borré su mensaje porque contiene spam '
-                       f'[strike {ctx.user.strikes} de {STRIKES_LIMIT}].'))
+                       f'[strike {ctx.user.strikes} de {SPAM_STRIKES_LIMIT}].'))
         return
 
     # If can not limit the user (available only for supergroups)
@@ -590,12 +589,6 @@ def group_talk_handler(ctx):
         else:
             delete_from_db(ctx, DBDelete.RESTRICTION)
             logger.info(LOG_MSG_UC, ctx.uid, ctx.cid, 'unrestricted', True)
-
-    # Or if he/she was kicked out
-    if ctx.expulsion:
-        if datetime.datetime.now() < ctx.expulsion.until:
-            delete_message(ctx.bot, ctx.cid, ctx.mid, 'user was kicked out')
-            return
 
     # Cancel greeting grouping
     if ctx.chat.prev_greet_users:
