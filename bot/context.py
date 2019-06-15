@@ -27,8 +27,8 @@ def get_query(query, chat_id=None, user_id=None):
         query = query.filter_by(user_id=user_id)
 
     if chat_id and user_id:
-        return query.with_for_update().first()
-    return query.with_for_update().all()
+        return query.first()
+    return query.all()
 
 
 def no_null(value):
@@ -162,7 +162,7 @@ class Context:
     #@flogger
     def _get_db_obj(self, model, attributes):
         query = self.dbs.query(model).filter_by(id=attributes['id'])
-        obj = query.with_for_update().first()
+        obj = query.first()
         if obj:
             for var, val in attributes.items():
                 if var != 'id':
