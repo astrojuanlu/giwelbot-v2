@@ -1,5 +1,4 @@
 # -*- coding: UTF-8 -*-
-# Copyright (C) 2019 Schmidt Cristian Hernán
 
 import re
 import random
@@ -19,7 +18,7 @@ OPERATOR_FUNC = {
 }
 
 SPACE = ('\u0020\u00a0\u2002\u2003\u2004\u2005\u2006'
-         '\u2007\u2008\u2009\u200a\u202f\u205f\u200b\ufeff')
+         '\u2007\u2008\u2009\u200a\u202f\u205f\ufeff\u200b')
 
 INVISIBLE = '\u2061\u2062\u2063\u2064'
 
@@ -69,10 +68,8 @@ def get_captcha(num_answers):
     # Add fake answers
     correct_answer = str(int(answer))  # for 1.0 → '1'
     if num_answers > 4:
-        answers = [correct_answer, str(num_a), str(num_b)]
-        if num_a != 0:
-            answers.append(f'{num_a}{num_b}')
-        answers = list(set(answers))
+        num_c = f'{num_a}{num_b}'
+        answers = list(set([correct_answer, str(num_a), str(num_b), num_c]))
     else:
         answers = [correct_answer]
     while len(answers) < num_answers:

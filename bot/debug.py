@@ -1,5 +1,4 @@
 # -*- coding: UTF-8 -*-
-# Copyright (C) 2019 Schmidt Cristian Hernán
 
 # Logging Levels
 # --------------
@@ -21,17 +20,10 @@ import threading
 import telegram
 import telegram.ext
 
-import sqlalchemy
-import database
-
 OBJECTS = (telegram.bot.Bot, telegram.update.Update, telegram.message.Message,
            telegram.chat.Chat, telegram.user.User,
            telegram.ext.jobqueue.Job, telegram.ext.jobqueue.JobQueue,
            types.GeneratorType)
-
-DB_OBJECTS = (sqlalchemy.ext.declarative.api.DeclarativeMeta,
-              database.Admission, database.Captcha, database.Restriction,
-              database.User, database.Chat)
 
 MAIN_FUNCTIONS_RE = re.compile('^.*_(handler|thread)$')
 
@@ -60,9 +52,6 @@ def __format(obj, kvsep=': ', quotes=True):
 
     if isinstance(obj, OBJECTS):
         return f'«{obj.__class__.__name__}»'
-
-    if isinstance(obj, DB_OBJECTS):
-        return f'«{str(obj)}»'
 
     if isinstance(obj, threading.Thread):
         name = obj.getName()
