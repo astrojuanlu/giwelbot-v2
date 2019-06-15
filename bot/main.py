@@ -522,14 +522,14 @@ def left_user_handler(ctx):
                        'delete service message (left user)')
 
     user = ctx.get_user(id=ctx.tgm.left_chat_member.id)
+
+    # Stop captchas timer
+    wait = ctx.mem.get(user.id, {}).get('wait', {}).pop(ctx.cid, None)
+    if wait:
+        wait.schedule_removal()
+
     admission = ctx.get_admissions(chat_id=ctx.cid, user_id=user.id)
     if admission:
-
-        # Stop captchas timer
-        wait = ctx.mem.get(user.id, {}).get('wait', {}).pop(ctx.cid, None)
-        if wait:
-            wait.schedule_removal()
-
         # Delete group captcha
         message_id = admission.group_captcha.message_id
         delete_message(ctx.bot, ctx.cid, message_id, 'delete captcha message')
