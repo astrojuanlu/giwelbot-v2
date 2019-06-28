@@ -298,6 +298,8 @@ def delete_message(bot, chat_id, message_id, text):
             logger.debug('%s, mid=%d deleted: %s', text, message_id, result)
         except TelegramError as tge:
             logger.warning('%s, mid=%d: %s', text, message_id, tge)
+    else:
+        logger.debug('Nothing to do, chat_id=%s, message_id=%s', chat_id, message_id)
 
 
 @flogger
@@ -351,8 +353,9 @@ def captcha_thread(ctx):
     ctx.mem.get(ctx.uid, {}).get('wait', {}).pop(ctx.cid, None)
 
     # Delete group captcha
-    message_id = ctx.admission.group_captcha.message_id
-    delete_message(ctx.bot, ctx.cid, message_id, 'delete captcha message')
+    mid = ctx.admission.group_captcha.message_id
+    if mid:
+        delete_message(ctx.bot, ctx.cid, mid, 'delete captcha message')
 
     # Modify private captcha
     if ctx.admission.private_captcha.status is CaptchaStatus.WAITING:
@@ -411,8 +414,8 @@ def greeting_thread(ctx):
         delete_from_db(ctx, admission)
 
     if names:
+        prev = (ctx.chat.prev_greet_users or '').strip()
         sep = ', '
-        prev = ctx.chat.prev_greet_users or ''
         num = len(names)
         if prev or num > 1:
             if num == 1:
@@ -431,9 +434,10 @@ def greeting_thread(ctx):
                        'delete previous greeting')
 
         # Save data
-        ctx.chat.prev_greet_users = prev + sep.join(names)
+        ctx.chat.prev_greet_users = (prev + sep.join(names)).strip()
         ctx.chat.prev_greet_message_id = message.message_id
-        logger.debug(LOG_MSG_C, ctx.cid, 'send greeting', bool(message))
+        status = f'mid={message.message_id}' if message else False
+        logger.debug(LOG_MSG_C, ctx.cid, 'send greeting', status)
 
 
 # ----------------------------------- #
@@ -531,8 +535,9 @@ def left_user_handler(ctx):
     admission = ctx.get_admissions(chat_id=ctx.cid, user_id=user.id)
     if admission:
         # Delete group captcha
-        message_id = admission.group_captcha.message_id
-        delete_message(ctx.bot, ctx.cid, message_id, 'delete captcha message')
+        mid = admission.group_captcha.message_id
+        if mid:
+            delete_message(ctx.bot, ctx.cid, mid, 'delete captcha message')
 
         # Modify private captcha
         captcha = admission.private_captcha

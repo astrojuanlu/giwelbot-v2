@@ -5,7 +5,6 @@
 import os
 import hmac
 import enum
-import datetime
 
 from sqlalchemy import create_engine, Column, ForeignKey, UniqueConstraint
 from sqlalchemy import BigInteger, Integer, String, Boolean, DateTime
@@ -170,7 +169,7 @@ class Restriction(BASE):
 
     chat_user_unique = UniqueConstraint(chat_id, user_id)
 
-    until = Column(DateTime, default=datetime.datetime.now, nullable=False)
+    until = Column(DateTime, nullable=False)
 
     def __repr__(self):
         return (f'Restriction:{self.id}:CID{self.chat_id}:UID{self.user_id}'
@@ -188,8 +187,8 @@ class Expulsion(BASE):
     user_id = Column(BigInteger, ForeignKey('user.id'), nullable=False)
     user = relationship('User', back_populates='expulsions')
 
-    reason = Column(String)
-    until = Column(DateTime, default=datetime.datetime.now)
+    reason = Column(String, nullable=False)
+    until = Column(DateTime, nullable=False)
 
     def __repr__(self):
         return (f'Expulsion:{self.id}:CID{self.chat_id}:UID{self.user_id}:'
@@ -208,7 +207,8 @@ class Chat(BASE):
     expulsions = relationship('Expulsion', back_populates='chat')
 
     def __repr__(self):
-        return f'Chat:{self.id}:{self.title}'
+        return (f'Chat:{self.id}:{self.title}:'
+                f'{self.prev_greet_message_id}:{self.prev_greet_users}')
 
 
 class User(BASE):

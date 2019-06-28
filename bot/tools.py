@@ -59,7 +59,7 @@ def _name(name):
 
 def _name_gt(name, max_len):
     name = _name(name)
-    return name if len(name) > max_len else ''
+    return name if len(name) >= max_len else ''
 
 def get_user_name(user):
     name = (_name_gt(user.first_name, 2) or

@@ -1,9 +1,11 @@
 # -*- coding: UTF-8 -*-
 # Copyright (C) 2019 Schmidt Cristian Hernán
 
+import time
 import logging
 import datetime
 import functools
+import threading
 
 from telegram import Update, TelegramError
 from telegram.ext import Job
@@ -200,10 +202,11 @@ class Context:
 
 class Contextualizer:
 
-    __slots__ = ('logger', 'mem', 'dbe')
+    __slots__ = ('logger', 'lock', 'mem', 'dbe')
 
     def __init__(self, env_database, delta_delete_admissions):
         self.logger = logging.getLogger(__name__)
+        self.lock = threading.Lock()
         self.mem = {}
         self.dbe = DatabaseEngine(env_database)
         self.initialize(delta_delete_admissions)
@@ -220,9 +223,13 @@ class Contextualizer:
             self.logger.debug('db open')
             result = None
             try:
-                ctx = Context(self.mem, dbs, args, kwargs)
-                self.logger.debug('go to %s', func.__name__)
-                result = func(ctx)
+                start = time.time()
+                with self.lock:
+                    self.logger.debug('%s wait %.3f seconds', func.__name__,
+                                      time.time() - start)
+                    ctx = Context(self.mem, dbs, args, kwargs)
+                    self.logger.debug('go to %s', func.__name__)
+                    result = func(ctx)
             except:
                 self.logger.exception('db rollback')
                 dbs.rollback()
