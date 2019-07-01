@@ -15,7 +15,7 @@ import threading
 import unicodedata
 
 
-DATE_FMT = '%y%m%d.%H%M%S'
+DT_FMT = '%y%m%d.%H%M%S'
 CHARACTERS = string.digits + string.ascii_letters
 SECRET_PHRASE = ''.join(secrets.choice(CHARACTERS) for _ in range(9)).encode()
 BASE64_ALTCHARS = ''.join(secrets.choice(CHARACTERS) for _ in range(2)).encode()

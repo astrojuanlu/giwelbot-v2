@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker, relationship
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm.collections import attribute_mapped_collection
 
-from tools import Sentinel, DATE_FMT
+from tools import Sentinel, DT_FMT
 
 LINK = '<a href="tg://user?id={}">{}</a>'
 BASE = declarative_base()
@@ -88,7 +88,7 @@ class Admission(BASE):
 
     def __repr__(self):
         return (f'Admission:{self.id}:CID{self.chat_id}:UID{self.user_id}'
-                f':G{self.to_greet}:{self.join_message_date:{DATE_FMT}}')
+                f':G{self.to_greet}:{self.join_message_date:{DT_FMT}}')
 
     @property
     def group_captcha(self):
@@ -173,7 +173,7 @@ class Restriction(BASE):
 
     def __repr__(self):
         return (f'Restriction:{self.id}:CID{self.chat_id}:UID{self.user_id}'
-                f':{self.until:{DATE_FMT}}')
+                f':{self.until:{DT_FMT}}')
 
 
 class Expulsion(BASE):
@@ -192,7 +192,7 @@ class Expulsion(BASE):
 
     def __repr__(self):
         return (f'Expulsion:{self.id}:CID{self.chat_id}:UID{self.user_id}:'
-                f'{self.until:{DATE_FMT}}:{self.reason}')
+                f'{self.until:{DT_FMT}}:{self.reason}')
 
 
 class Chat(BASE):

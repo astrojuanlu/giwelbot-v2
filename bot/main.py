@@ -27,7 +27,7 @@ from spam import is_spam
 from debug import flogger
 from tools import (get_user_name, get_user_mention, run_async, get_token,
                    change_seed, remove_diacritics, time_to_text, chunked,
-                   SECRET_PHRASE, DATE_FMT)
+                   SECRET_PHRASE, DT_FMT)
 from context import Contextualizer
 from captcha import get_captcha
 from database import (CaptchaStatus, CaptchaLocation, BASE, User, Chat,
@@ -144,7 +144,7 @@ HELP = ('<b>Bot de bienvenida</b>\n\n'
 
 DTL = '%(asctime)s.%(msecs)03d ' if DATETIME_IN_LOG else ''
 LOGFMT = f'{DTL}%(levelname)-8s %(threadName)-10s %(name)-9s %(lineno)-4d %(message)s'
-logging.basicConfig(level=logging.DEBUG, format=LOGFMT, datefmt=DATE_FMT)
+logging.basicConfig(level=logging.DEBUG, format=LOGFMT, datefmt=DT_FMT)
 logger = logging.getLogger(__name__)
 context = Contextualizer(ENV_DATABASE, DELTA_DELETE_ADMISSIONS)
 

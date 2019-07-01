@@ -22,16 +22,19 @@ import telegram
 import telegram.ext
 
 import sqlalchemy
-import database
+import sqlalchemy.orm
+
+from tools import DT_FMT
+from database import Admission, Captcha, Restriction, User, Chat
 
 OBJECTS = (telegram.bot.Bot, telegram.update.Update, telegram.message.Message,
            telegram.chat.Chat, telegram.user.User,
            telegram.ext.jobqueue.Job, telegram.ext.jobqueue.JobQueue,
            types.GeneratorType)
 
-DB_OBJECTS = (sqlalchemy.ext.declarative.api.DeclarativeMeta,
-              database.Admission, database.Captcha, database.Restriction,
-              database.User, database.Chat)
+DB_OBJECTS = (Admission, Captcha, Restriction, User, Chat,
+              sqlalchemy.ext.declarative.api.DeclarativeMeta,
+              sqlalchemy.orm.session.Session)
 
 MAIN_FUNCTIONS_RE = re.compile('^.*_(handler|thread)$')
 
@@ -55,7 +58,10 @@ def __format(obj, kvsep=': ', quotes=True):
                                                   __format(v)))
                                          for k, v in obj.items()))
 
-    if isinstance(obj, (datetime.datetime, datetime.timedelta)):
+    if isinstance(obj, datetime.datetime):
+        return f'«{obj:{DT_FMT}}»'
+
+    if isinstance(obj, datetime.timedelta):
         return f'«{str(obj).split(".")[0]}»'
 
     if isinstance(obj, OBJECTS):
