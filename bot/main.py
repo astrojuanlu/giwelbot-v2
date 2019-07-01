@@ -421,7 +421,8 @@ def greeting_thread(ctx):
             if num == 1:
                 text = prev + AND + names[0]
             else:
-                text = prev + sep + sep.join(names[:-1]) + AND + names[-1]
+                prev_sep = prev + sep if prev else ''
+                text = prev_sep + sep.join(names[:-1]) + AND + names[-1]
             text = GREETING_PLURAL.format(html.escape(text))
         else:
             text = GREETING_SINGULAR.format(html.escape(names[0]))
@@ -434,7 +435,7 @@ def greeting_thread(ctx):
                        'delete previous greeting')
 
         # Save data
-        ctx.chat.prev_greet_users = (prev + sep.join(names)).strip()
+        ctx.chat.prev_greet_users = (prev + sep if prev else '') + sep.join(names)
         ctx.chat.prev_greet_message_id = message.message_id
         status = f'mid={message.message_id}' if message else False
         logger.debug(LOG_MSG_C, ctx.cid, 'send greeting', status)
