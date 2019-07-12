@@ -10,6 +10,7 @@ from debug import flogger
 OPERATORS = '+-*/'
 MAX_NUMBER = 9
 MIN_SEPARATION = 2
+MAX_NUMBER_ANSWERS = (MAX_NUMBER * 2 + 1) / MIN_SEPARATION
 
 OPERATOR_FUNC = {
     '+': operator.add,
@@ -51,6 +52,12 @@ def get_captcha_text(*items):
 
 @flogger
 def get_captcha(num_answers):
+    assert num_answers <= MAX_NUMBER_ANSWERS, 'num_answers exceeds the safe limit'
+    # Because of the inclusion of the operands (`num_a` and `num_b`), the result
+    # (`answer`) and the union of the operands (`num_a num_b`) the maximum
+    # number can be up to 4 more than the MAX_NUMBER_ANSWERS but cannot be
+    # guaranteed right now
+
     operator_sym = random.choice(OPERATORS)
     operator_func = OPERATOR_FUNC[operator_sym]
     while True:
@@ -58,7 +65,9 @@ def get_captcha(num_answers):
         num_b = random.randint(0, MAX_NUMBER)
         try:
             answer = operator_func(num_a, num_b)
-            if abs(answer) < MAX_NUMBER and int(answer) == answer:
+            abs_answer = abs(answer)
+            int_answer = int(answer)
+            if abs_answer < MAX_NUMBER and int_answer == answer:
                 break
         except ZeroDivisionError:
             pass
@@ -66,20 +75,26 @@ def get_captcha(num_answers):
     # Obfuscation
     captcha = get_captcha_text(num_a, operator_sym, num_b)
 
-    # Add fake answers
-    correct_answer = str(int(answer))  # for 1.0 → '1'
+    # Correct and fake answers
+    correct_answer = str(int_answer)
+    answers = []
     if num_answers > 4:
-        answers = [correct_answer, str(num_a), str(num_b)]
-        if num_a != 0:
-            answers.append(f'{num_a}{num_b}')
-        answers = list(set(answers))
-    else:
-        answers = [correct_answer]
-    while len(answers) < num_answers:
+        if num_a != answer:
+            answers.append(f'{num_a}')
+            if num_a != 0:
+                answers.append(f'{num_a}{num_b}')
+        if num_b not in (answer, num_a):
+            answers.append(f'{num_b}')
+
+    limit = num_answers - 1
+    while len(answers) < limit:
         num = random.randint(-MAX_NUMBER, MAX_NUMBER)
-        if abs(abs(answer) - abs(num)) > MIN_SEPARATION:
+        if abs(abs_answer - abs(num)) > MIN_SEPARATION:
             num = str(num)
-            if num not in answers:
+            if num not in answers and num != correct_answer:
                 answers.append(num)
+
     random.shuffle(answers)
+    # Never put the correct_answer in the beginning
+    answers.insert(random.randint(1, limit), correct_answer)
     return captcha, correct_answer, answers
