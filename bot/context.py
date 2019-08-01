@@ -13,7 +13,7 @@ from telegram.ext import Job
 from sqlalchemy.sql import and_, or_, exists
 
 from debug import flogger
-from tools import Sentinel
+from tools import Sentinel, run_async
 from database import (DatabaseEngine, Admission, Captcha,
                       Restriction, Expulsion, Chat, User)
 
@@ -204,12 +204,11 @@ class Contextualizer:
 
     __slots__ = ('logger', 'lock', 'mem', 'dbe')
 
-    def __init__(self, env_database, delta_delete_admissions):
+    def __init__(self, env_database):
         self.logger = logging.getLogger(__name__)
         self.lock = threading.Lock()
         self.mem = {}
         self.dbe = DatabaseEngine(env_database)
-        self.initialize(delta_delete_admissions)
 
 
     def __repr__(self):
@@ -244,7 +243,7 @@ class Contextualizer:
         return decorator
 
 
-    def initialize(self, delta_delete_admissions):
+    def initialize(self, bot, delta_delete_admissions):
         now = datetime.datetime.now()
         adm_lim = now - delta_delete_admissions
         exp_lim = now - 90 * delta_delete_admissions
@@ -272,6 +271,25 @@ class Contextualizer:
         # )
         # times = {'now': now, 'adm_lim': adm_lim, 'exp_lim': exp_lim}
         # dbs.execute('\n'.join(sql), times)
+
+        # Deleting old admissions/captchas that have not been eliminated
+        query = dbs.query(Admission).filter(Admission.join_message_date < adm_lim)
+        lst = []
+        for adm in query.all():
+            kicked = dbs.query(Expulsion).filter(
+                and_(
+                    Expulsion.chat_id == adm.chat_id,
+                    Expulsion.user_id == adm.user_id,
+                    Expulsion.until > adm.join_message_date,
+                )
+            ).count()
+            if kicked:
+                lst.append((adm.chat_id, adm.join_message_id))
+
+            if adm.group_captcha:
+                lst.append((adm.chat_id, adm.group_captcha.message_id))
+        if lst:
+            self.delete_messages(bot, lst)
 
         queries = (
             # Expired Admissions
@@ -301,3 +319,14 @@ class Contextualizer:
             dbs.expire_all()
         dbs.commit()
         dbs.close()
+
+
+    @run_async
+    def delete_messages(self, bot, message_list):
+        text = 'old admissions'
+        for chat_id, message_id in message_list:
+            try:
+                result = bot.delete_message(chat_id=chat_id, message_id=message_id)
+                self.logger.debug('%s, mid=%d deleted: %s', text, message_id, result)
+            except TelegramError as tge:
+                self.logger.warning('%s, mid=%d: %s', text, message_id, tge)
