@@ -320,6 +320,8 @@ def delete_from_db(ctx, delete, *, chat_id=None, user_id=None):
     else:
         raise NotImplementedError(f'delete type {type(delete)}')
 
+    group_captcha_mids = []  # the associated messages must be deleted
+
     if delete:
         #if DBDelete.USER in delete:
         #    items.append(ctx.user)
@@ -329,6 +331,8 @@ def delete_from_db(ctx, delete, *, chat_id=None, user_id=None):
             items.append(admission)
             if admission:
                 items.extend(admission.captchas.values())
+                if admission.group_captcha:
+                    group_captcha_mids.append(admission.group_captcha.message_id)
 
         if DBDelete.RESTRICTION in delete:
             items.append(get_from_db(ctx, 'restriction', chat_id, user_id))
@@ -340,6 +344,9 @@ def delete_from_db(ctx, delete, *, chat_id=None, user_id=None):
         if item:
             ctx.dbs.delete(item)
             logger.debug('Deleted from db %s', item)
+
+    for mid in group_captcha_mids:
+        delete_message(ctx.bot, ctx.cid, mid, 'delete captcha message')
 
 
 # ----------------------------------- #
