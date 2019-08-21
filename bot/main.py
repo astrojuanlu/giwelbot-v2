@@ -390,10 +390,17 @@ def captcha_thread(ctx):
 def greeting_thread(ctx):
     # Waiting time is over: greet the users
 
+    threshold = datetime.datetime.now() - GREETING_TIMER
     names = []
     for admission in ctx.get_admissions(chat_id=ctx.cid):
 
+        if admission.join_message_date > threshold:
+            continue  # there is another thread to greet him
+
         if admission.group_captcha.status is not CaptchaStatus.SOLVED:
+            text = '»»» CaptchaStatus not SOLVED in greeting_thread'
+            logger.debug(text)
+            ctx.bot.send_message(chat_id=DEBUG_CHAT_ID, text=text)
             continue  # captcha still to be resolved
 
         uid = admission.user_id
