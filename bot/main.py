@@ -219,7 +219,7 @@ def restrict_user(bot, chat_id, user_id, restriction, until=0):
 
 
 @flogger
-@run_async
+#@run_async # FIXME
 def ban_user(bot, chat_id, user_id, reason, until):
     chat = bot.get_chat(chat_id=chat_id)
 
@@ -397,7 +397,7 @@ def greeting_thread(ctx):
         if admission.join_message_date > threshold:
             continue  # there is another thread to greet him
 
-        if admission.group_captcha.status is not CaptchaStatus.SOLVED:
+        if admission.group_captcha.status is not CaptchaStatus.SOLVED:  # XXX
             text = '»»» CaptchaStatus not SOLVED in greeting_thread'
             logger.debug(text)
             ctx.bot.send_message(chat_id=DEBUG_CHAT_ID, text=text)
@@ -569,6 +569,7 @@ def left_user_handler(ctx):
 @flogger
 @context
 def group_talk_handler(ctx):
+    now = datetime.datetime.now()
 
     # Spam is not allowed
     if is_spam(ctx.tgm):
@@ -576,7 +577,7 @@ def group_talk_handler(ctx):
         ctx.user.strikes += 1
 
         if ctx.user.strikes > SPAM_STRIKES_LIMIT:
-            until = datetime.datetime.now() + BANNED_RESTRICTION
+            until = now + BANNED_RESTRICTION
             reason = 'spammer'
             ban_user(ctx.bot, ctx.cid, ctx.uid, reason, until)
             delete_from_db(ctx, DBDelete.ADM_RES)
@@ -590,6 +591,11 @@ def group_talk_handler(ctx):
                        f'[strike {ctx.user.strikes} de {SPAM_STRIKES_LIMIT}].'))
         return
 
+    # User kicked
+    if ctx.expulsion and ctx.expulsion.until > now:
+        delete_message(ctx.bot, ctx.cid, ctx.mid, 'user was kicked')
+        return
+
     # If can not limit the user (available only for supergroups)
     # must delete their messages until the captcha is resolve
     status = ctx.admission.group_captcha.status
@@ -600,7 +606,7 @@ def group_talk_handler(ctx):
 
     # Or until run out of time limitation
     if ctx.restriction:
-        if datetime.datetime.now() < ctx.restriction.until:
+        if now < ctx.restriction.until:
             if not ctx.text or URL_MAIL_SEARCH(ctx.text):
                 # Only text allowed at beginning
                 delete_message(ctx.bot, ctx.cid, ctx.mid,
