@@ -218,27 +218,31 @@ class Contextualizer:
     def __call__(self, func):
         @functools.wraps(func)
         def decorator(*args, **kwargs):
-            dbs = self.dbe.get_session()
-            self.logger.debug('db open')
             result = None
+            dbs = None
             try:
                 start = time.time()
                 with self.lock:
                     self.logger.debug('%s wait %.3f seconds', func.__name__,
                                       time.time() - start)
+                    dbs = self.dbe.get_session()
+                    self.logger.debug('db open')
                     ctx = Context(self.mem, dbs, args, kwargs)
                     self.logger.debug('go to %s', func.__name__)
                     result = func(ctx)
             except:
-                self.logger.exception('db rollback')
-                dbs.rollback()
-                raise
+                if dbs:
+                    self.logger.exception('db rollback')
+                    dbs.rollback()
+                    raise
             else:
-                self.logger.debug('db commit')
-                dbs.commit()
+                if dbs:
+                    self.logger.debug('db commit')
+                    dbs.commit()
             finally:
-                self.logger.debug('db close')
-                dbs.close()
+                if dbs:
+                    self.logger.debug('db close')
+                    dbs.close()
             return result
         return decorator
 
@@ -316,8 +320,7 @@ class Contextualizer:
         )
         for query in queries:
             query.delete(synchronize_session=False)
-            dbs.expire_all()
-        dbs.commit()
+            dbs.commit()
         dbs.close()
 
 
