@@ -33,7 +33,6 @@ OBJECTS = (telegram.bot.Bot, telegram.update.Update, telegram.message.Message,
            types.GeneratorType)
 
 DB_OBJECTS = (Admission, Captcha, Restriction, User, Chat,
-              sqlalchemy.ext.declarative.api.DeclarativeMeta,
               sqlalchemy.orm.session.Session)
 
 MAIN_FUNCTIONS_RE = re.compile('^.*_(handler|thread)$')
